@@ -243,37 +243,56 @@ spec:
             - |
               set -e
 
-              # Start rsyslog in background
-              rsyslogd
+              echo "=== Mail Relay Container Starting ==="
+              echo "$(date): Container startup initiated"
+
+              # Start rsyslog in background with verbose logging
+              echo "$(date): Starting rsyslog..."
+              rsyslogd -n &
+              RSYSLOG_PID=$!
+
+              # Give rsyslog a moment to start
+              sleep 2
+              echo "$(date): Rsyslog started with PID $RSYSLOG_PID"
 
               {{- if .Values.dkim.enabled }}
               # Start OpenDKIM
-              echo "Starting OpenDKIM..."
+              echo "$(date): Starting OpenDKIM..."
               opendkim -f &
               OPENDKIM_PID=$!
 
               # Wait for OpenDKIM to start
               sleep 5
+              echo "$(date): OpenDKIM started with PID $OPENDKIM_PID"
               {{- end }}
 
               # Start Postfix
-              echo "Starting Postfix..."
+              echo "$(date): Starting Postfix..."
               /usr/sbin/postfix start-fg &
               POSTFIX_PID=$!
+              echo "$(date): Postfix started with PID $POSTFIX_PID"
 
               # Function to handle shutdown
               shutdown() {
-                echo "Shutting down..."
+                echo "$(date): Shutting down mail relay services..."
                 {{- if .Values.dkim.enabled }}
+                echo "$(date): Stopping OpenDKIM..."
                 kill $OPENDKIM_PID 2>/dev/null || true
                 {{- end }}
+                echo "$(date): Stopping Postfix..."
                 /usr/sbin/postfix stop
                 kill $POSTFIX_PID 2>/dev/null || true
+                echo "$(date): Stopping rsyslog..."
+                kill $RSYSLOG_PID 2>/dev/null || true
+                echo "$(date): Mail relay shutdown complete"
                 exit 0
               }
 
               # Set up signal handlers
               trap 'shutdown' SIGTERM SIGINT
+
+              echo "$(date): Mail relay services started successfully"
+              echo "=== Monitoring mail relay processes ==="
 
               # Wait for processes
               wait $POSTFIX_PID
@@ -302,6 +321,9 @@ spec:
           volumeMounts:
             - name: postfix-config
               mountPath: /tmp/postfix-config
+            - name: rsyslog-config
+              mountPath: /etc/rsyslog.conf
+              subPath: rsyslog.conf
             {{- if .Values.dkim.enabled }}
             - name: opendkim-config
               mountPath: /tmp/opendkim-config
@@ -322,6 +344,9 @@ spec:
         - name: postfix-config
           configMap:
             name: {{ include "mail-relay.fullname" . }}-postfix-config
+        - name: rsyslog-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-rsyslog
         {{- if .Values.dkim.enabled }}
         - name: opendkim-config
           configMap:
