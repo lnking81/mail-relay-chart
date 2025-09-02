@@ -27,27 +27,6 @@ spec:
         - protocol: TCP
           port: {{ .Values.service.ports.smtp.port }}
   egress:
-    # Allow DNS resolution
+    # Allow all egress traffic - mail servers need unrestricted outbound access
     - to: []
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # Allow outbound SMTP
-    - to: []
-      ports:
-        - protocol: TCP
-          port: 25
-        - protocol: TCP
-          port: 587
-        - protocol: TCP
-          port: 465
-    # Allow HTTP/HTTPS for package updates and external services
-    - to: []
-      ports:
-        - protocol: TCP
-          port: 80
-        - protocol: TCP
-          port: 443
 {{- end }}

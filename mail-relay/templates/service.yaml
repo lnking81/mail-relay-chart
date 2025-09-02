@@ -4,10 +4,8 @@ metadata:
   name: {{ include "mail-relay.fullname" . }}
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
-  {{- if .Values.externalDns.enabled }}
+  {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
   annotations:
-    external-dns.alpha.kubernetes.io/hostname: {{ include "mail-relay.externalDnsHostname" . }}
-    external-dns.alpha.kubernetes.io/ttl: "{{ .Values.externalDns.ttl }}"
     {{- with .Values.externalDns.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

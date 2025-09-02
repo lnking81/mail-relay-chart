@@ -10,6 +10,12 @@ RUN apt-get update && \
     rsyslog \
     ca-certificates \
     curl \
+    # DNS and networking tools for troubleshooting
+    dnsutils \
+    iputils-ping \
+    telnet \
+    netcat-openbsd \
+    nmap \
     # Add kubectl for DNS management
     && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
     && chmod +x kubectl \

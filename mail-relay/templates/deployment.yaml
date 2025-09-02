@@ -70,91 +70,6 @@ spec:
             - name: shared-data
               mountPath: /shared
         {{- end }}
-        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
-        - name: dns-manager
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command:
-            - /bin/bash
-            - -c
-            - |
-              set -e
-              echo "Setting up DNS records with detected IP..."
-
-              # Wait for external IP to be detected
-              timeout=60
-              while [ $timeout -gt 0 ]; do
-                if [ -f "/shared/external-ip" ] && [ "$(cat /shared/external-ip)" != "unknown" ]; then
-                  EXTERNAL_IP=$(cat /shared/external-ip)
-                  echo "Using detected external IP: $EXTERNAL_IP"
-                  break
-                fi
-                echo "Waiting for external IP detection..."
-                sleep 2
-                timeout=$((timeout - 2))
-              done
-
-              if [ $timeout -le 0 ] || [ "$EXTERNAL_IP" = "unknown" ]; then
-                echo "ERROR: Could not get valid external IP"
-                exit 1
-              fi
-
-              # kubectl is pre-installed in the custom Docker image
-              echo "Using pre-installed kubectl for DNS management"
-
-              # Create DNS records ConfigMap with detected IP
-              mkdir -p /tmp/dns-records
-
-              # Generate SPF records using detected IP
-              {{- range .Values.mail.domains }}
-              cat > /tmp/dns-records/{{ .name }}-spf.yaml << EOF
-              apiVersion: v1
-              kind: ConfigMap
-              metadata:
-                name: {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }}
-                namespace: {{ $.Release.Namespace }}
-                labels:
-                  helm.sh/chart: {{ $.Chart.Name }}-{{ $.Chart.Version | replace "+" "_" }}
-                  app.kubernetes.io/name: {{ include "mail-relay.name" $ }}
-                  app.kubernetes.io/instance: {{ $.Release.Name }}
-                  app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
-                  app.kubernetes.io/managed-by: {{ $.Release.Service }}
-                  dns-record-type: spf
-                  domain: {{ .name }}
-              data:
-                external-ip: "$EXTERNAL_IP"
-                spf-record: "v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all"
-                mx-record: "{{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
-                dmarc-record: "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
-                domain: "{{ .name }}"
-                hostname: "{{ $.Values.mail.hostname }}"
-              EOF
-
-              # Apply the DNS record ConfigMap
-              /usr/local/bin/kubectl apply -f /tmp/dns-records/{{ .name }}-spf.yaml
-              echo "Created DNS ConfigMap for {{ .name }} with IP: $EXTERNAL_IP"
-              {{- end }}
-
-              # Log the DNS records that should be created
-              echo "============================================="
-              echo "DNS Records to create manually:"
-              echo "============================================="
-              {{- range .Values.mail.domains }}
-              echo "Domain: {{ .name }}"
-              echo "  A Record: {{ $.Values.mail.hostname }}. A $EXTERNAL_IP"
-              echo "  MX Record: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
-              echo "  SPF Record: {{ .name }}. TXT \"v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all\""
-              echo "  DMARC Record: _dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
-              echo ""
-              {{- end }}
-
-              echo "DNS management setup completed successfully"
-          volumeMounts:
-            - name: shared-data
-              mountPath: /shared
-        {{- end }}
         - name: setup
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -246,8 +161,47 @@ spec:
               echo "=== Mail Relay Container Starting ==="
               echo "$(date): Container startup initiated"
 
-              # Start rsyslog in background with verbose logging
-              echo "$(date): Starting rsyslog..."
+              {{- if .Values.persistence.enabled }}
+              # Set up persistent Postfix queue directory
+              echo "$(date): Setting up persistent Postfix queue..."
+              mkdir -p /data/postfix-spool
+
+              # If this is the first run, copy the default Postfix spool structure
+              if [ ! -f "/data/postfix-spool/.initialized" ]; then
+                echo "$(date): Initializing Postfix queue structure..."
+                cp -r /var/spool/postfix/* /data/postfix-spool/
+                touch /data/postfix-spool/.initialized
+                echo "$(date): Postfix queue structure initialized"
+              else
+                echo "$(date): Using existing persistent queue structure"
+              fi
+
+              # Mount the persistent queue directory
+              echo "$(date): Linking persistent queue directory..."
+              rm -rf /var/spool/postfix
+              ln -sf /data/postfix-spool /var/spool/postfix
+
+              # Set proper permissions
+              chown -R postfix:postfix /data/postfix-spool
+              echo "$(date): Persistent queue setup completed"
+              {{- end }}
+
+              # Configure Postfix for stdout logging
+              echo "$(date): Configuring Postfix for stdout logging..."
+              # Modify main.cf to disable syslog and use stdout
+              echo "maillog_file = /dev/stdout" >> /etc/postfix/main.cf
+              echo "maillog_file_prefixes = /dev" >> /etc/postfix/main.cf
+
+              # Start rsyslog with configuration to forward to stdout
+              echo "$(date): Starting rsyslog with stdout forwarding..."
+              # Configure rsyslog to forward mail logs to stdout
+              cat > /etc/rsyslog.d/49-stdout.conf << 'EOF'
+              # Forward mail logs to stdout
+              mail.*                          /proc/1/fd/1
+              # Also log to files for compatibility
+              mail.*                          -/var/log/mail.log
+              EOF
+
               rsyslogd -n &
               RSYSLOG_PID=$!
 
@@ -256,9 +210,12 @@ spec:
               echo "$(date): Rsyslog started with PID $RSYSLOG_PID"
 
               {{- if .Values.dkim.enabled }}
-              # Start OpenDKIM
-              echo "$(date): Starting OpenDKIM..."
-              opendkim -f &
+              # Start OpenDKIM with stdout logging
+              echo "$(date): Starting OpenDKIM with stdout logging..."
+              # Configure OpenDKIM to log to stdout via syslog
+              sed -i 's/^Syslog\s*.*/Syslog yes/' /etc/opendkim.conf || echo "Syslog yes" >> /etc/opendkim.conf
+              sed -i 's/^SyslogSuccess\s*.*/SyslogSuccess yes/' /etc/opendkim.conf || echo "SyslogSuccess yes" >> /etc/opendkim.conf
+              opendkim -f -v &
               OPENDKIM_PID=$!
 
               # Wait for OpenDKIM to start
@@ -266,11 +223,21 @@ spec:
               echo "$(date): OpenDKIM started with PID $OPENDKIM_PID"
               {{- end }}
 
-              # Start Postfix
-              echo "$(date): Starting Postfix..."
+              # Start Postfix with foreground logging
+              echo "$(date): Starting Postfix with stdout logging..."
               /usr/sbin/postfix start-fg &
               POSTFIX_PID=$!
               echo "$(date): Postfix started with PID $POSTFIX_PID"
+
+              # Start a log monitoring process to ensure all logs go to stdout
+              echo "$(date): Starting log monitoring..."
+              (
+                # Monitor mail logs and forward to stdout
+                tail -F /var/log/mail.log /var/log/maillog /var/log/messages 2>/dev/null | while read line; do
+                  echo "[MAIL-LOG] $line"
+                done
+              ) &
+              LOG_MONITOR_PID=$!
 
               # Function to handle shutdown
               shutdown() {
@@ -282,6 +249,8 @@ spec:
                 echo "$(date): Stopping Postfix..."
                 /usr/sbin/postfix stop
                 kill $POSTFIX_PID 2>/dev/null || true
+                echo "$(date): Stopping log monitor..."
+                kill $LOG_MONITOR_PID 2>/dev/null || true
                 echo "$(date): Stopping rsyslog..."
                 kill $RSYSLOG_PID 2>/dev/null || true
                 echo "$(date): Mail relay shutdown complete"
@@ -298,7 +267,7 @@ spec:
               wait $POSTFIX_PID
           ports:
             - name: smtp
-              containerPort: 25
+              containerPort: {{ .Values.service.ports.smtp.port }}
               protocol: TCP
           {{- if .Values.healthCheck.enabled }}
           livenessProbe:
