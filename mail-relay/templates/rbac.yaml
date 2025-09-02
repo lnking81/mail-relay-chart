@@ -1,0 +1,39 @@
+{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-dns-manager
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-dns-manager
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "mail-relay.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "mail-relay.fullname" . }}-dns-manager
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

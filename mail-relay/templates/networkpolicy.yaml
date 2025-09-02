@@ -1,0 +1,53 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mail-relay.fullname" . }}
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mail-relay.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow SMTP traffic from trusted networks
+    - from:
+        {{- range .Values.networkPolicy.ingress.allowedCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        # Allow from pods in the same namespace
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Release.Namespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.ports.smtp.port }}
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow outbound SMTP
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 25
+        - protocol: TCP
+          port: 587
+        - protocol: TCP
+          port: 465
+    # Allow HTTP/HTTPS for package updates and external services
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+{{- end }}

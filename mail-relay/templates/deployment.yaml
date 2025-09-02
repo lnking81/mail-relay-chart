@@ -1,0 +1,354 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mail-relay.fullname" . }}
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "mail-relay.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/postfix-config: {{ include (print $.Template.BasePath "/configmap-postfix.yaml") . | sha256sum }}
+        {{- if .Values.dkim.enabled }}
+        checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "mail-relay.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+        - name: ip-detector
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: curlimages/curl:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Detecting external IP address..."
+
+              # Try multiple services to detect external IP
+              for service in "https://ifconfig.me/ip" "https://icanhazip.com" "https://ipv4.icanhazip.com"; do
+                echo "Trying $service..."
+                if IP=$(curl -s --connect-timeout 10 --max-time 30 "$service" 2>/dev/null); then
+                  if echo "$IP" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' >/dev/null; then
+                    echo "Detected external IP: $IP"
+                    echo "$IP" > /shared/external-ip
+                    echo "$(date): External IP detected as $IP" >> /shared/ip-detection.log
+                    exit 0
+                  fi
+                fi
+                echo "Failed to get valid IP from $service"
+              done
+
+              echo "ERROR: Could not detect external IP address"
+              echo "$(date): Failed to detect external IP" >> /shared/ip-detection.log
+              echo "unknown" > /shared/external-ip
+              exit 1
+          volumeMounts:
+            - name: shared-data
+              mountPath: /shared
+        {{- end }}
+        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+        - name: dns-manager
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Setting up DNS records with detected IP..."
+
+              # Wait for external IP to be detected
+              timeout=60
+              while [ $timeout -gt 0 ]; do
+                if [ -f "/shared/external-ip" ] && [ "$(cat /shared/external-ip)" != "unknown" ]; then
+                  EXTERNAL_IP=$(cat /shared/external-ip)
+                  echo "Using detected external IP: $EXTERNAL_IP"
+                  break
+                fi
+                echo "Waiting for external IP detection..."
+                sleep 2
+                timeout=$((timeout - 2))
+              done
+
+              if [ $timeout -le 0 ] || [ "$EXTERNAL_IP" = "unknown" ]; then
+                echo "ERROR: Could not get valid external IP"
+                exit 1
+              fi
+
+              # kubectl is pre-installed in the custom Docker image
+              echo "Using pre-installed kubectl for DNS management"
+
+              # Create DNS records ConfigMap with detected IP
+              mkdir -p /tmp/dns-records
+
+              # Generate SPF records using detected IP
+              {{- range .Values.mail.domains }}
+              cat > /tmp/dns-records/{{ .name }}-spf.yaml << EOF
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }}
+                namespace: {{ $.Release.Namespace }}
+                labels:
+                  helm.sh/chart: {{ $.Chart.Name }}-{{ $.Chart.Version | replace "+" "_" }}
+                  app.kubernetes.io/name: {{ include "mail-relay.name" $ }}
+                  app.kubernetes.io/instance: {{ $.Release.Name }}
+                  app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+                  app.kubernetes.io/managed-by: {{ $.Release.Service }}
+                  dns-record-type: spf
+                  domain: {{ .name }}
+              data:
+                external-ip: "$EXTERNAL_IP"
+                spf-record: "v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all"
+                mx-record: "{{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
+                dmarc-record: "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
+                domain: "{{ .name }}"
+                hostname: "{{ $.Values.mail.hostname }}"
+              EOF
+
+              # Apply the DNS record ConfigMap
+              /usr/local/bin/kubectl apply -f /tmp/dns-records/{{ .name }}-spf.yaml
+              echo "Created DNS ConfigMap for {{ .name }} with IP: $EXTERNAL_IP"
+              {{- end }}
+
+              # Log the DNS records that should be created
+              echo "============================================="
+              echo "DNS Records to create manually:"
+              echo "============================================="
+              {{- range .Values.mail.domains }}
+              echo "Domain: {{ .name }}"
+              echo "  A Record: {{ $.Values.mail.hostname }}. A $EXTERNAL_IP"
+              echo "  MX Record: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
+              echo "  SPF Record: {{ .name }}. TXT \"v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all\""
+              echo "  DMARC Record: _dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+              echo ""
+              {{- end }}
+
+              echo "DNS management setup completed successfully"
+          volumeMounts:
+            - name: shared-data
+              mountPath: /shared
+        {{- end }}
+        - name: setup
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              # Packages are pre-installed in the custom Docker image
+              echo "Using pre-built mail-relay image with packages already installed"
+
+              # Set up postfix configuration
+              cp /tmp/postfix-config/main.cf /etc/postfix/main.cf
+              cp /tmp/postfix-config/master.cf /etc/postfix/master.cf
+
+              {{- if .Values.mail.headerChecks.enabled }}
+              cp /tmp/postfix-config/header_checks /etc/postfix/header_checks
+              postmap /etc/postfix/header_checks
+              {{- end }}
+
+              {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
+              cp /tmp/postfix-config/sasl_passwd /etc/postfix/sasl_passwd
+              postmap /etc/postfix/sasl_passwd
+              chmod 600 /etc/postfix/sasl_passwd*
+              {{- end }}
+
+              {{- if .Values.dkim.enabled }}
+              # Set up OpenDKIM configuration
+              cp /tmp/opendkim-config/opendkim.conf /etc/opendkim.conf
+              cp /tmp/opendkim-config/TrustedHosts /etc/opendkim/TrustedHosts
+              cp /tmp/opendkim-config/KeyTable /etc/opendkim/KeyTable
+              cp /tmp/opendkim-config/SigningTable /etc/opendkim/SigningTable
+
+              # Generate DKIM keys if they don't exist and auto-generation is enabled
+              {{- if .Values.dkim.autoGenerate }}
+              # Create DKIM keys directory
+              mkdir -p /data/dkim-keys
+              {{- range .Values.mail.domains }}
+              if [ ! -f "/data/dkim-keys/{{ .name }}.private" ]; then
+                echo "Generating DKIM key for {{ .name }}"
+                opendkim-genkey -b {{ $.Values.dkim.keySize }} -s {{ .dkimSelector }} -d {{ .name }} -D /tmp
+                mv /tmp/{{ .dkimSelector }}.private /data/dkim-keys/{{ .name }}.private
+                mv /tmp/{{ .dkimSelector }}.txt /data/dkim-keys/{{ .name }}.txt
+                echo "DKIM DNS record for {{ .name }}:"
+                cat /data/dkim-keys/{{ .name }}.txt
+              fi
+              # Link the key to the expected location
+              ln -sf /data/dkim-keys/{{ .name }}.private /etc/opendkim/keys/{{ .name }}.private
+              {{- end }}
+              {{- end }}
+
+              # Set permissions (already configured in Dockerfile, but ensure they're correct)
+              chown -R opendkim:opendkim /etc/opendkim/keys/
+              chmod -R 700 /etc/opendkim/keys/
+              chown -R opendkim:opendkim /var/run/opendkim
+              {{- end }}
+
+              # Set up postfix permissions
+              chown -R postfix:postfix /var/spool/postfix
+
+              echo "Setup completed successfully"
+
+          volumeMounts:
+            - name: postfix-config
+              mountPath: /tmp/postfix-config
+            {{- if .Values.dkim.enabled }}
+            - name: opendkim-config
+              mountPath: /tmp/opendkim-config
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              # Start rsyslog in background
+              rsyslogd
+
+              {{- if .Values.dkim.enabled }}
+              # Start OpenDKIM
+              echo "Starting OpenDKIM..."
+              opendkim -f &
+              OPENDKIM_PID=$!
+
+              # Wait for OpenDKIM to start
+              sleep 5
+              {{- end }}
+
+              # Start Postfix
+              echo "Starting Postfix..."
+              /usr/sbin/postfix start-fg &
+              POSTFIX_PID=$!
+
+              # Function to handle shutdown
+              shutdown() {
+                echo "Shutting down..."
+                {{- if .Values.dkim.enabled }}
+                kill $OPENDKIM_PID 2>/dev/null || true
+                {{- end }}
+                /usr/sbin/postfix stop
+                kill $POSTFIX_PID 2>/dev/null || true
+                exit 0
+              }
+
+              # Set up signal handlers
+              trap 'shutdown' SIGTERM SIGINT
+
+              # Wait for processes
+              wait $POSTFIX_PID
+          ports:
+            - name: smtp
+              containerPort: 25
+              protocol: TCP
+          {{- if .Values.healthCheck.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.failureThreshold }}
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            successThreshold: {{ .Values.healthCheck.successThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: postfix-config
+              mountPath: /tmp/postfix-config
+            {{- if .Values.dkim.enabled }}
+            - name: opendkim-config
+              mountPath: /tmp/opendkim-config
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+            - name: shared-data
+              mountPath: /shared
+            {{- end }}
+      volumes:
+        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+        - name: shared-data
+          emptyDir: {}
+        {{- end }}
+        - name: postfix-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-postfix-config
+        {{- if .Values.dkim.enabled }}
+        - name: opendkim-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-opendkim-config
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          {{- if .Values.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "mail-relay.fullname" . }}-data
+          {{- end }}
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mail-relay.fullname" . }}
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+  {{- if .Values.externalDns.enabled }}
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ include "mail-relay.externalDnsHostname" . }}
+    external-dns.alpha.kubernetes.io/ttl: "{{ .Values.externalDns.ttl }}"
+    {{- with .Values.externalDns.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.ports.smtp.port }}
+      targetPort: {{ .Values.service.ports.smtp.targetPort }}
+      protocol: {{ .Values.service.ports.smtp.protocol }}
+      name: smtp
+  selector:
+    {{- include "mail-relay.selectorLabels" . | nindent 4 }}

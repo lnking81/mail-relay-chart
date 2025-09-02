@@ -1,0 +1,302 @@
+{{- if .Values.dnsHelper.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-dns-helper
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+data:
+  dns-records.md: |
+    # DNS Records for {{ .Values.mail.hostname }}
+
+    This file contains the DNS records you need to configure for your mail relay.
+
+    ## Automatic Records (via external-dns)
+    {{- if .Values.externalDns.enabled }}
+
+    The following record is automatically managed:
+    - A record: {{ include "mail-relay.externalDnsHostname" . }} → <LoadBalancer-IP>
+    {{- else }}
+
+    External DNS is disabled. You need to manually create:
+    - A record: {{ .Values.mail.hostname }} → <EXTERNAL-IP>
+    {{- end }}
+
+    ## Manual Records Required
+
+    {{- range .Values.mail.domains }}
+    ### Domain: {{ .name }}
+
+    #### MX Record
+    ```
+    {{ .name }}.    MX  10  {{ $.Values.mail.hostname }}.
+    ```
+
+    #### SPF Record
+    {{- if and $.Values.externalDns.enabled $.Values.externalDns.autoManageDnsRecords }}
+    ```
+    {{ .name }}.    TXT  "v=spf1 ip4:<DETECTED-IP> a:{{ $.Values.mail.hostname }} ~all"
+    ```
+    *Note: The <DETECTED-IP> will be automatically replaced with the detected external IP when DNS management is enabled.*
+
+    To get the detected IP and generated SPF record:
+    ```bash
+    kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -o jsonpath='{.data.spf-record}'
+    ```
+    {{- else }}
+    ```
+    {{ .name }}.    TXT  "v=spf1 a:{{ $.Values.mail.hostname }} ~all"
+    ```
+    *Note: This uses hostname-based SPF. For IP-based SPF, replace with your server's external IP:*
+    ```
+    {{ .name }}.    TXT  "v=spf1 ip4:<YOUR-EXTERNAL-IP> a:{{ $.Values.mail.hostname }} ~all"
+    ```
+    {{- end }}
+
+    #### DMARC Record (Optional but Recommended)
+    ```
+    _dmarc.{{ .name }}.    TXT  "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
+    ```
+
+    #### DKIM Record
+    The DKIM record will be generated after deployment. Retrieve it using:
+    ```bash
+    kubectl exec -n {{ $.Release.Namespace }} deployment/{{ include "mail-relay.fullname" $ }}-mail-relay -- \
+      cat /data/dkim-keys/{{ .name }}.txt
+    ```
+
+    Then add a TXT record:
+    ```
+    {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}.    TXT  "<DKIM-PUBLIC-KEY>"
+    ```
+
+    ---
+    {{- end }}
+
+    ## Testing Commands
+
+    After configuring DNS records, test them:
+
+    ```bash
+    # Test A record
+    dig A {{ .Values.mail.hostname }}
+
+    {{- range .Values.mail.domains }}
+    # Test MX record for {{ .name }}
+    dig MX {{ .name }}
+
+    # Test SPF record for {{ .name }}
+    dig TXT {{ .name }} | grep spf
+
+    # Test DKIM record for {{ .name }}
+    dig TXT {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}
+
+    # Test DMARC record for {{ .name }}
+    dig TXT _dmarc.{{ .name }}
+    {{- end }}
+    ```
+
+    ## Online Testing Tools
+
+    - MXToolbox: https://mxtoolbox.com/
+    - DKIM Validator: https://dkimvalidator.com/
+    - SPF Record Checker: https://www.spfwizard.net/
+
+  get-dns-records-with-ip.sh: |
+    #!/bin/bash
+    # Script to retrieve DNS records with detected external IP
+
+    NAMESPACE="{{ .Release.Namespace }}"
+    DEPLOYMENT="{{ include "mail-relay.fullname" . }}"
+
+    echo "Retrieving DNS records with detected external IP..."
+    echo "Namespace: $NAMESPACE"
+    echo
+
+    {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+    # Get detected external IP
+    EXTERNAL_IP=""
+    if kubectl get pod -n "$NAMESPACE" -l app.kubernetes.io/name={{ include "mail-relay.name" . }} -o name | head -1 | xargs -I {} kubectl exec -n "$NAMESPACE" {} -- test -f /shared/external-ip 2>/dev/null; then
+      EXTERNAL_IP=$(kubectl get pod -n "$NAMESPACE" -l app.kubernetes.io/name={{ include "mail-relay.name" . }} -o name | head -1 | xargs -I {} kubectl exec -n "$NAMESPACE" {} -- cat /shared/external-ip 2>/dev/null)
+    fi
+
+    if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" = "unknown" ]; then
+      echo "⚠️  External IP not detected or not available"
+      echo "Using hostname-based SPF records instead"
+      echo
+    else
+      echo "🌐 Detected External IP: $EXTERNAL_IP"
+      echo
+    fi
+
+    echo "DNS Records to create:"
+    echo "================================="
+
+    {{- range .Values.mail.domains }}
+    echo
+    echo "📧 Domain: {{ .name }}"
+    echo "----------------------------------------"
+
+    # Try to get from ConfigMap first
+    if kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" >/dev/null 2>&1; then
+      echo "✅ Auto-generated DNS records available:"
+      echo
+      echo "A Record:"
+      echo "  {{ $.Values.mail.hostname }}. A $(kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.external-ip}')"
+      echo
+      echo "MX Record:"
+      kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.mx-record}'
+      echo
+      echo "SPF Record:"
+      echo "  {{ .name }}. TXT \"$(kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.spf-record}')\""
+      echo
+      echo "DMARC Record:"
+      echo "  _dmarc.{{ .name }}. TXT \"$(kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.dmarc-record}')\""
+    else
+      echo "📝 Manual DNS records (ConfigMap not found):"
+      echo
+      if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "unknown" ]; then
+        echo "A Record: {{ $.Values.mail.hostname }}. A $EXTERNAL_IP"
+        echo "MX Record: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
+        echo "SPF Record: {{ .name }}. TXT \"v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all\""
+        echo "DMARC Record: _dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+      else
+        echo "A Record: {{ $.Values.mail.hostname }}. A <YOUR-EXTERNAL-IP>"
+        echo "MX Record: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
+        echo "SPF Record: {{ .name }}. TXT \"v=spf1 a:{{ $.Values.mail.hostname }} ~all\""
+        echo "DMARC Record: _dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+      fi
+    fi
+    echo
+    echo "----------------------------------------"
+    {{- end }}
+
+    {{- else }}
+    echo "🔧 Auto DNS management is disabled"
+    echo "Using static hostname-based records"
+    echo
+    echo "DNS Records to create:"
+    echo "================================="
+
+    {{- range .Values.mail.domains }}
+    echo
+    echo "📧 Domain: {{ .name }}"
+    echo "----------------------------------------"
+    echo "A Record: {{ $.Values.mail.hostname }}. A <YOUR-EXTERNAL-IP>"
+    echo "MX Record: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
+    echo "SPF Record: {{ .name }}. TXT \"v=spf1 a:{{ $.Values.mail.hostname }} ~all\""
+    echo "DMARC Record: _dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+    echo "----------------------------------------"
+    {{- end }}
+    {{- end }}
+
+    echo
+    echo "🧪 After creating DNS records, test them with:"
+    {{- range .Values.mail.domains }}
+    echo "  dig A {{ $.Values.mail.hostname }}"
+    echo "  dig MX {{ .name }}"
+    echo "  dig TXT {{ .name }}"
+    echo "  dig TXT _dmarc.{{ .name }}"
+    {{- end }}
+
+  get-dkim-records.sh: |
+    #!/bin/bash
+    # Script to retrieve DKIM records from the mail relay deployment
+
+    NAMESPACE="{{ .Release.Namespace }}"
+    DEPLOYMENT="{{ include "mail-relay.fullname" . }}-mail-relay"
+
+    echo "Retrieving DKIM records from deployment..."
+    echo "Namespace: $NAMESPACE"
+    echo "Deployment: $DEPLOYMENT"
+    echo
+
+    # Check if deployment exists
+    if ! kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" >/dev/null 2>&1; then
+      echo "ERROR: Deployment $DEPLOYMENT not found in namespace $NAMESPACE"
+      exit 1
+    fi
+
+    # Get DKIM records
+    echo "DKIM DNS Records:"
+    echo "================================="
+
+    {{- range .Values.mail.domains }}
+    echo
+    echo "Domain: {{ .name }}"
+    echo "Selector: {{ .dkimSelector | default "mail" }}"
+    echo "Record Name: {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}"
+    echo "Record Type: TXT"
+    echo "Record Value:"
+    kubectl exec -n "$NAMESPACE" deployment/"$DEPLOYMENT" -- \
+      cat /data/dkim-keys/{{ .name }}.txt 2>/dev/null || \
+      echo "  ERROR: DKIM key file not found for {{ .name }}"
+    echo
+    echo "---------------------------------"
+    {{- end }}
+
+    echo
+    echo "Copy the content between quotes to your DNS provider"
+    echo "Format: TXT record with the quoted content (excluding quotes)"
+
+  test-smtp.sh: |
+    #!/bin/bash
+    # Script to test SMTP connectivity
+
+    NAMESPACE="{{ .Release.Namespace }}"
+    SERVICE="{{ include "mail-relay.fullname" . }}-mail-relay"
+
+    echo "Testing SMTP connectivity..."
+    echo "Service: $SERVICE.$NAMESPACE.svc.cluster.local"
+    echo
+
+    # Test from within cluster
+    kubectl run smtp-test --rm -i --restart=Never --image=busybox -- sh -c "
+      echo 'Testing SMTP port {{ .Values.service.ports.smtp.port }}...'
+      timeout 10 nc -zv $SERVICE.$NAMESPACE.svc.cluster.local {{ .Values.service.ports.smtp.port }}
+    " 2>/dev/null
+
+    echo
+    echo "For interactive SMTP testing:"
+    echo "kubectl run --rm -i --tty debug --image=busybox --restart=Never -- sh"
+    echo "# Then inside the container:"
+    echo "telnet $SERVICE.$NAMESPACE.svc.cluster.local 25"
+
+  check-dns-propagation.sh: |
+    #!/bin/bash
+    # Script to check DNS record propagation
+
+    echo "Checking DNS propagation for {{ .Values.mail.hostname }}..."
+    echo "========================================"
+
+    # Check A record
+    echo "A Record:"
+    dig +short A {{ .Values.mail.hostname }} || echo "A record not found"
+    echo
+
+    {{- range .Values.mail.domains }}
+    echo "Domain: {{ .name }}"
+    echo "----------------"
+
+    # Check MX record
+    echo "MX Record:"
+    dig +short MX {{ .name }} || echo "MX record not found"
+    echo
+
+    # Check SPF record
+    echo "SPF Record:"
+    dig +short TXT {{ .name }} | grep spf || echo "SPF record not found"
+    echo
+
+    # Check DKIM record
+    echo "DKIM Record:"
+    dig +short TXT {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }} || echo "DKIM record not found"
+    echo
+
+    # Check DMARC record
+    echo "DMARC Record:"
+    dig +short TXT _dmarc.{{ .name }} || echo "DMARC record not found"
+    echo
+    echo "========================================"
+    {{- end }}
+{{- end }}

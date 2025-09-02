@@ -1,0 +1,154 @@
+1. Get the application URL by running these commands:
+{{- if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "mail-relay.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+           You can watch the status of by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "mail-relay.fullname" . }}'
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "mail-relay.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.service.ports.smtp.port }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "{{- include "mail-relay.selectorLabels" . }}" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
+{{- end }}
+
+2. Mail Relay Configuration:
+   - Hostname: {{ .Values.mail.hostname }}
+   - SMTP Port: {{ .Values.service.ports.smtp.port }}
+
+{{- if .Values.dkim.enabled }}
+3. DKIM Configuration:
+{{- if .Values.dkim.autoGenerate }}
+   DKIM keys have been automatically generated.
+
+   🔍 Quick DKIM record retrieval:
+   kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "mail-relay.fullname" . }}-mail-relay -- cat /data/dkim-keys/*.txt
+
+   {{- if .Values.dnsHelper.extractDkimJob }}
+   📋 Check the DKIM extractor job logs for formatted DNS records:
+   kubectl logs -n {{ .Release.Namespace }} job/{{ include "mail-relay.fullname" . }}-dkim-extractor
+   {{- end }}
+
+   {{- if .Values.dnsHelper.enabled }}
+   🛠️  Use the helper script:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dkim-records\.sh}' | bash
+
+   📖 For detailed DNS guidance, see:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.dns-records\.md}'
+   {{- end }}
+{{- else }}
+   Please ensure DKIM keys are properly configured in the persistent volume.
+{{- end }}
+
+   Required DNS Records:
+{{- range .Values.mail.domains }}
+   - TXT record for {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}
+{{- end }}
+{{- end }}
+
+4. Testing the Mail Relay:
+   You can test the mail relay by connecting to the SMTP service:
+
+   kubectl run --rm -i --tty debug --image=busybox --restart=Never -- sh
+   # Inside the container:
+   telnet {{ include "mail-relay.fullname" . }} {{ .Values.service.ports.smtp.port }}
+
+{{- if .Values.externalDns.enabled }}
+5. External DNS:
+   The service is configured with external-dns annotations for hostname: {{ include "mail-relay.externalDnsHostname" . }}
+   Make sure external-dns is properly configured in your cluster.
+{{- end }}
+
+{{- if .Values.persistence.enabled }}
+6. Persistent Storage:
+   Mail relay data is stored in: {{ include "mail-relay.fullname" . }}-data PVC
+   Size: {{ .Values.persistence.size }}
+{{- end }}
+
+{{- if .Values.mail.relayHost }}
+7. Relay Configuration:
+   Outgoing mail will be relayed through: {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }}
+{{- end }}
+
+🌐 DNS Records Management:
+
+{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+   ✅ Automatic DNS management is ENABLED
+
+   🔍 External IP Detection:
+   The system automatically detects your external IP and creates DNS records.
+
+   📋 Get DNS records with detected IP:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dns-records-with-ip\.sh}' | bash
+
+   📊 Check DNS management job logs:
+   kubectl logs -n {{ .Release.Namespace }} job/{{ include "mail-relay.fullname" . }}-dns-updater
+
+   🎯 Quick DNS record retrieval:
+   {{- range .Values.mail.domains }}
+   kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -o jsonpath='{.data.spf-full}'
+   {{- end }}
+
+   {{- if .Values.dnsHelper.enabled }}
+   🛠️  Complete DNS setup guidance:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.dns-records\.md}' > dns-records.md
+   {{- end }}
+
+   Essential DNS records (using detected IP):
+{{- range .Values.mail.domains }}
+   For {{ .name }}:
+   - A: {{ $.Values.mail.hostname }}. A <DETECTED-IP>
+   - MX: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}.
+   - SPF: {{ .name }}. TXT "v=spf1 ip4:<DETECTED-IP> a:{{ $.Values.mail.hostname }} ~all"
+   - DMARC: _dmarc.{{ .name }}. TXT "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
+{{- end }}
+
+{{- else }}
+   ⚠️  Automatic DNS management is DISABLED
+   You need to manually configure DNS records.
+
+   {{- if .Values.dnsHelper.enabled }}
+   📖 For detailed DNS setup guidance:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.dns-records\.md}' > dns-records.md
+
+   Essential DNS records needed:
+{{- range .Values.mail.domains }}
+   For {{ .name }}:
+   - A: {{ $.Values.mail.hostname }}. A <YOUR-EXTERNAL-IP>
+   - MX: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}.
+   - SPF: {{ .name }}. TXT "v=spf1 a:{{ $.Values.mail.hostname }} ~all"
+   - DMARC: _dmarc.{{ .name }}. TXT "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
+{{- end }}
+   {{- else }}
+   Configure these DNS records manually:
+{{- range .Values.mail.domains }}
+   For {{ .name }}:
+   - A: {{ $.Values.mail.hostname }}. A <YOUR-EXTERNAL-IP>
+   - MX: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}.
+   - SPF: {{ .name }}. TXT "v=spf1 a:{{ $.Values.mail.hostname }} ~all"
+   - DKIM: {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}. TXT "<get-from-deployment>"
+{{- end }}
+   {{- end }}
+
+   🧪 Testing Commands:
+   # Test SMTP connectivity
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.test-smtp\.sh}' | bash
+
+   # Check DNS propagation
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.check-dns-propagation\.sh}' | bash
+
+   # Get DKIM records
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dkim-records\.sh}' | bash
+
+   # Get complete DNS records with detected IP
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dns-records-with-ip\.sh}' | bash
+{{- end }}
+
+📚 Additional Resources:
+   - Complete DNS Management Guide: See DNS-MANAGEMENT.md in the chart repository
+   - Online DNS Testing: https://mxtoolbox.com/
+   - DKIM Testing: https://dkimvalidator.com/
+   - SPF Testing: https://www.spfwizard.net/

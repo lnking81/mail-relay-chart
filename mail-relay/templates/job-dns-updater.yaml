@@ -1,0 +1,157 @@
+{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-dns-updater
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "mail-relay.selectorLabels" . | nindent 8 }}
+        job: dns-updater
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
+      containers:
+      - name: dns-updater
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+
+          echo "============================================="
+          echo "    DNS Records Management with Detected IP"
+          echo "============================================="
+          echo
+          echo "Mail Server: {{ .Values.mail.hostname }}"
+          echo "Namespace: {{ .Release.Namespace }}"
+          echo "Release: {{ .Release.Name }}"
+          echo
+
+          # Install kubectl
+          apt-get update
+          apt-get install -y curl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mv kubectl /usr/local/bin/
+
+          # Wait for main deployment to be ready and get external IP
+          timeout=300
+          EXTERNAL_IP=""
+          while [ $timeout -gt 0 ]; do
+            if kubectl get deployment {{ include "mail-relay.fullname" . }} -n {{ .Release.Namespace }} >/dev/null 2>&1; then
+              # Try to get external IP from running pod
+              POD_NAME=$(kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "mail-relay.name" . }} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+              if [ -n "$POD_NAME" ]; then
+                if kubectl exec -n {{ .Release.Namespace }} "$POD_NAME" -- test -f /shared/external-ip 2>/dev/null; then
+                  EXTERNAL_IP=$(kubectl exec -n {{ .Release.Namespace }} "$POD_NAME" -- cat /shared/external-ip 2>/dev/null)
+                  if [ "$EXTERNAL_IP" != "unknown" ] && [ -n "$EXTERNAL_IP" ]; then
+                    echo "✅ Retrieved external IP from pod: $EXTERNAL_IP"
+                    break
+                  fi
+                fi
+              fi
+            fi
+            echo "Waiting for external IP to be available..."
+            sleep 10
+            timeout=$((timeout - 10))
+          done
+
+          if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" = "unknown" ]; then
+            echo "❌ Could not retrieve external IP"
+            echo "DNS records will need to be configured manually"
+            exit 1
+          fi
+
+          echo "🌐 Using External IP: $EXTERNAL_IP"
+          echo
+
+          # Create/Update DNS ConfigMaps for each domain
+          {{- range .Values.mail.domains }}
+          echo "📧 Processing domain: {{ .name }}"
+
+          # Create DNS ConfigMap with detected IP
+          cat << EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }}
+            namespace: {{ $.Release.Namespace }}
+            labels:
+              helm.sh/chart: {{ $.Chart.Name }}-{{ $.Chart.Version | replace "+" "_" }}
+              app.kubernetes.io/name: {{ include "mail-relay.name" $ }}
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+              app.kubernetes.io/managed-by: {{ $.Release.Service }}
+              dns-record-type: spf
+              domain: {{ .name }}
+          data:
+            external-ip: "$EXTERNAL_IP"
+            hostname: "{{ $.Values.mail.hostname }}"
+            domain: "{{ .name }}"
+            a-record: "{{ $.Values.mail.hostname }}. A $EXTERNAL_IP"
+            mx-record: "{{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
+            spf-record: "v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all"
+            dmarc-record: "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
+            spf-full: "{{ .name }}. TXT \"v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all\""
+            dmarc-full: "_dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+          EOF
+
+          echo "✅ Created DNS ConfigMap for {{ .name }}"
+          {{- end }}
+
+          echo
+          echo "============================================="
+          echo "📋 DNS Records Summary"
+          echo "============================================="
+          echo
+          echo "🏷️  Required DNS Records (copy to your DNS provider):"
+          echo
+
+          {{- range .Values.mail.domains }}
+          echo "Domain: {{ .name }}"
+          echo "----------------------------------------"
+          echo "A Record:"
+          echo "  Name: {{ $.Values.mail.hostname }}"
+          echo "  Type: A"
+          echo "  Value: $EXTERNAL_IP"
+          echo
+          echo "MX Record:"
+          echo "  Name: {{ .name }}"
+          echo "  Type: MX"
+          echo "  Priority: 10"
+          echo "  Value: {{ $.Values.mail.hostname }}"
+          echo
+          echo "SPF Record:"
+          echo "  Name: {{ .name }}"
+          echo "  Type: TXT"
+          echo "  Value: \"v=spf1 ip4:$EXTERNAL_IP a:{{ $.Values.mail.hostname }} ~all\""
+          echo
+          echo "DMARC Record:"
+          echo "  Name: _dmarc.{{ .name }}"
+          echo "  Type: TXT"
+          echo "  Value: \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+          echo
+          echo "----------------------------------------"
+          echo
+          {{- end }}
+
+          echo "🔧 Helper Commands:"
+          echo "To retrieve these records later:"
+          echo "  kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dns-records-with-ip\.sh}' | bash"
+          echo
+          echo "To test DNS propagation:"
+          echo "  kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.check-dns-propagation\.sh}' | bash"
+          echo
+          echo "============================================="
+          echo "✅ DNS Management Complete!"
+          echo "============================================="
+{{- end }}

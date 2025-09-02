@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-postfix-config
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+data:
+  main.cf: |
+    # Basic configuration
+    myhostname = {{ .Values.mail.hostname }}
+    mydomain = {{ .Values.mail.hostname }}
+    myorigin = $mydomain
+
+    # Network and interface configuration
+    inet_interfaces = all
+    inet_protocols = ipv4
+
+    # Destination configuration
+    mydestination = $myhostname, localhost.$mydomain, localhost
+
+    # Relay configuration
+    mynetworks = {{ range .Values.mail.trustedNetworks }}{{ . }}, {{ end }}{{ range .Values.mail.trustedIPs }}{{ . }}, {{ end }}127.0.0.0/8
+
+    {{- if .Values.mail.relayHost }}
+    relayhost = {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }}
+    {{- if .Values.mail.relayCredentials.enabled }}
+    smtp_sasl_auth_enable = yes
+    smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+    smtp_sasl_security_options = noanonymous
+    smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+    smtp_use_tls = yes
+    {{- end }}
+    {{- end }}
+
+    # Message size limit
+    message_size_limit = {{ .Values.mail.messageSizeLimit | default "50MB" | replace "MB" "000000" | replace "KB" "000" | replace "GB" "000000000" }}
+
+    # Security settings
+    smtpd_banner = $myhostname ESMTP
+    disable_vrfy_command = yes
+    smtpd_helo_required = yes
+    smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname, permit
+    smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, reject_unknown_sender_domain, permit
+    smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination, permit
+
+    # DKIM configuration
+    {{- if .Values.dkim.enabled }}
+    milter_default_action = accept
+    milter_protocol = 2
+    smtpd_milters = inet:localhost:8891
+    non_smtpd_milters = inet:localhost:8891
+    {{- end }}
+
+    # Header checks
+    {{- if .Values.mail.headerChecks.enabled }}
+    header_checks = regexp:/etc/postfix/header_checks
+    {{- end }}
+
+    # Compatibility settings
+    compatibility_level = 2
+
+    # Queue settings
+    maximal_queue_lifetime = 1d
+    bounce_queue_lifetime = 1d
+
+    # TLS settings
+    smtp_tls_note_starttls_offer = yes
+    smtp_tls_security_level = may
+    smtpd_tls_security_level = may
+    smtpd_tls_received_header = yes
+
+  master.cf: |
+    # ==========================================================================
+    # service type  private unpriv  chroot  wakeup  maxproc command + args
+    #               (yes)   (yes)   (yes)   (never) (100)
+    # ==========================================================================
+    smtp      inet  n       -       y       -       -       smtpd
+    submission inet n       -       y       -       -       smtpd
+      -o syslog_name=postfix/submission
+      -o smtpd_tls_security_level=encrypt
+      -o smtpd_sasl_auth_enable=yes
+      -o smtpd_client_restrictions=permit_sasl_authenticated,reject
+
+    # Custom relay port (based on your configuration)
+    {{ .Values.service.ports.smtp.port }}      inet  n       -       y       -       -       smtpd
+      -o syslog_name=postfix/relay
+      -o smtpd_client_restrictions=permit_mynetworks,reject
+
+    pickup    unix  n       -       y       60      1       pickup
+    cleanup   unix  n       -       y       -       0       cleanup
+    qmgr      unix  n       -       n       300     1       qmgr
+    tlsmgr    unix  -       -       y       1000?   1       tlsmgr
+    rewrite   unix  -       -       y       -       -       trivial-rewrite
+    bounce    unix  -       -       y       -       0       bounce
+    defer     unix  -       -       y       -       0       bounce
+    trace     unix  -       -       y       -       0       bounce
+    verify    unix  -       -       y       -       1       verify
+    flush     unix  n       -       y       1000?   0       flush
+    proxymap  unix  -       -       n       -       -       proxymap
+    proxywrite unix -       -       n       -       1       proxymap
+    smtp      unix  -       -       y       -       -       smtp
+    relay     unix  -       -       y       -       -       smtp
+    showq     unix  n       -       y       -       -       showq
+    error     unix  -       -       y       -       -       error
+    retry     unix  -       -       y       -       -       error
+    discard   unix  -       -       y       -       -       discard
+    local     unix  -       n       n       -       -       local
+    virtual   unix  -       n       n       -       -       virtual
+    lmtp      unix  -       -       y       -       -       lmtp
+    anvil     unix  -       -       y       -       1       anvil
+    scache    unix  -       -       y       -       1       scache
+
+  {{- if .Values.mail.headerChecks.enabled }}
+  header_checks: |
+    {{- if .Values.mail.headerChecks.ignoreForeignReceivedHeaders }}
+    # Ignore Received headers not from configured domains
+    {{- range .Values.mail.domains }}
+    /^Received: from (?!.*{{ .name | replace "." "\\." }}).*/ IGNORE
+    {{- end }}
+    # Ignore Received headers not from mail hostname
+    /^Received: from (?!{{ $.Values.mail.hostname | replace "." "\\." }}).*/ IGNORE
+    {{- end }}
+    {{- range .Values.mail.headerChecks.rules }}
+    {{ tpl .pattern $ }} {{ .action }}
+    {{- end }}
+  {{- end }}
+
+  {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
+  sasl_passwd: |
+    {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }} {{ .Values.mail.relayCredentials.username }}:{{ .Values.mail.relayCredentials.password }}
+  {{- end }}

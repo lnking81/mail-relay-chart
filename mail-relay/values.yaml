@@ -1,0 +1,179 @@
+# Default values for mail-relay.
+# This is a YAML-formatted file.
+
+# Image configuration
+image:
+  repository: ghcr.io/lnking81/mail-relay-chart
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service configuration
+service:
+  type: ClusterIP
+  ports:
+    smtp:
+      port: 25
+      targetPort: 25
+      protocol: TCP
+
+# External DNS configuration
+externalDns:
+  enabled: true
+  hostname: "" # Will be set to {{ .Values.mail.hostname }} if empty
+  ttl: 300
+  # Additional annotations for external-dns
+  annotations:
+    {}
+    # external-dns.alpha.kubernetes.io/txt-owner-id: "mail-relay"
+    # external-dns.alpha.kubernetes.io/txt-prefix: "mail-relay-"
+
+  # Automated DNS record management
+  autoManageDnsRecords: false # Set to true to auto-create SPF/DKIM/DMARC records with detected IP
+  autoCreateDmarc: true # Create DMARC records when autoManageDnsRecords is enabled
+  dmarcPolicy: "v=DMARC1; p=none; rua=mailto:postmaster@" # DMARC policy (domain will be appended)
+
+  # When autoManageDnsRecords is enabled:
+  # - External IP is automatically detected
+  # - SPF records include both detected IP and hostname: "v=spf1 ip4:<detected-ip> a:<hostname> ~all"
+  # - DNS ConfigMaps are created with ready-to-use DNS records
+  # - A DNS management job runs to set up all records automatically
+
+# DNS Helper configuration
+dnsHelper:
+  # Create helper scripts and documentation
+  enabled: true
+  # Create post-install job to extract DKIM records
+  extractDkimJob: true
+
+# Mail configuration
+mail:
+  hostname: "mail.example.com"
+  domains:
+    - name: "example.com"
+      dkimSelector: "mail"
+
+  # Relay configuration
+  relayHost: "" # External SMTP relay host (optional)
+  relayPort: 587
+  relayCredentials:
+    enabled: false
+    username: ""
+    password: ""
+    existingSecret: ""
+    usernameKey: "username"
+    passwordKey: "password"
+
+  # Trusted networks/hosts that can send mail through this relay
+  trustedNetworks:
+    - "127.0.0.0/8"
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+  # Additional trusted IPs (from your history)
+  trustedIPs: []
+
+  # Message size limit (in bytes)
+  messageSizeLimit: "50MB"
+
+  # Header checks configuration
+  headerChecks:
+    enabled: true
+    # Rules will be generated in templates to ignore Received headers
+    # not from configured domains or hostname
+    ignoreForeignReceivedHeaders: true
+    rules: []
+
+# DKIM configuration
+dkim:
+  enabled: true
+  # Key size in bits
+  keySize: 2048
+  # Automatically generate DKIM keys if they don't exist
+  autoGenerate: true
+  # Existing secret containing DKIM keys (optional)
+  existingSecret: ""
+
+# Persistence
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  # Existing PVC name (optional)
+  existingClaim: ""
+
+# Security context
+securityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+
+podSecurityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+  fsGroup: 0
+
+# Resources
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Service account
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  name: ""
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Network policy
+networkPolicy:
+  enabled: true
+  ingress:
+    # Allow ingress from trusted networks
+    allowedCIDRs:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+
+# Monitoring
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: 30s
+
+# Health checks
+healthCheck:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1

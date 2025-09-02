@@ -1,0 +1,157 @@
+{{- if and .Values.dkim.enabled .Values.dkim.autoGenerate .Values.dnsHelper.extractDkimJob }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-dkim-extractor
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "mail-relay.selectorLabels" . | nindent 8 }}
+        job: dkim-extractor
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: dkim-extractor
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+
+          echo "============================================="
+          echo "    DKIM DNS Records for Mail Relay"
+          echo "============================================="
+          echo
+          echo "Mail Server: {{ .Values.mail.hostname }}"
+          echo "Namespace: {{ .Release.Namespace }}"
+          echo "Release: {{ .Release.Name }}"
+          echo
+
+          # Wait for DKIM keys to be available
+          timeout=120
+          while [ $timeout -gt 0 ]; do
+            if ls /data/dkim-keys/*.txt >/dev/null 2>&1; then
+              break
+            fi
+            echo "Waiting for DKIM keys to be generated..."
+            sleep 5
+            timeout=$((timeout - 5))
+          done
+
+          if [ $timeout -le 0 ]; then
+            echo "ERROR: DKIM keys not found after waiting 2 minutes"
+            echo "Check the main deployment logs:"
+            echo "kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "mail-relay.fullname" . }}-mail-relay"
+            exit 1
+          fi
+
+          # Extract and display DKIM records
+          echo "DKIM Public Keys Generated:"
+          echo "============================================="
+
+          for domain_file in /data/dkim-keys/*.txt; do
+            if [ -f "$domain_file" ]; then
+              domain=$(basename "$domain_file" .txt)
+              echo
+              echo "📧 Domain: $domain"
+              echo "🔑 Selector: {{ (index .Values.mail.domains 0).dkimSelector | default "mail" }}"
+              echo "📝 DNS Record Name: {{ (index .Values.mail.domains 0).dkimSelector | default "mail" }}._domainkey.$domain"
+              echo "📋 DNS Record Type: TXT"
+              echo "💾 DNS Record Value:"
+              echo "----------------------------------------"
+              cat "$domain_file" | head -1
+              echo "----------------------------------------"
+              echo
+              echo "⚠️  Copy the entire content above (including quotes) to your DNS provider"
+              echo "🌐 Test the record at: https://mxtoolbox.com/dkim.aspx"
+              echo
+            fi
+          done
+
+          echo "============================================="
+          echo "Additional Required DNS Records:"
+          echo "============================================="
+
+          {{- range .Values.mail.domains }}
+          echo
+          echo "🏷️  Domain: {{ .name }}"
+          echo "----------------------------------------"
+
+          echo "1. MX Record:"
+          echo "   Name: {{ .name }}"
+          echo "   Type: MX"
+          echo "   Priority: 10"
+          echo "   Value: {{ $.Values.mail.hostname }}"
+          echo
+
+          echo "2. SPF Record:"
+          echo "   Name: {{ .name }}"
+          echo "   Type: TXT"
+          echo "   Value: \"v=spf1 a:{{ $.Values.mail.hostname }} ~all\""
+          echo
+
+          echo "3. DMARC Record (Recommended):"
+          echo "   Name: _dmarc.{{ .name }}"
+          echo "   Type: TXT"
+          echo "   Value: \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+          echo
+          {{- end }}
+
+          echo "============================================="
+          echo "🧪 Testing Your Configuration:"
+          echo "============================================="
+          echo
+          echo "After adding DNS records, test them:"
+          echo
+          {{- range .Values.mail.domains }}
+          echo "For {{ .name }}:"
+          echo "  dig MX {{ .name }}"
+          echo "  dig TXT {{ .name }}"
+          echo "  dig TXT {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}"
+          echo "  dig TXT _dmarc.{{ .name }}"
+          echo
+          {{- end }}
+
+          echo "📊 Online testing tools:"
+          echo "  - Overall: https://mxtoolbox.com/"
+          echo "  - DKIM: https://dkimvalidator.com/"
+          echo "  - SPF: https://www.spfwizard.net/"
+          echo
+
+          echo "🔧 Helper scripts available in ConfigMap:"
+          echo "  kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dkim-records\.sh}' | bash"
+          echo "  kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.check-dns-propagation\.sh}' | bash"
+          echo
+
+          echo "============================================="
+          echo "✅ DKIM Key Extraction Complete!"
+          echo "============================================="
+
+        volumeMounts:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          mountPath: /data
+        {{- end }}
+      volumes:
+      {{- if .Values.persistence.enabled }}
+      - name: data
+        {{- if .Values.persistence.existingClaim }}
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistence.existingClaim }}
+        {{- else }}
+        persistentVolumeClaim:
+          claimName: {{ include "mail-relay.fullname" . }}-data
+        {{- end }}
+      {{- else }}
+      - name: data
+        emptyDir: {}
+      {{- end }}
+{{- end }}

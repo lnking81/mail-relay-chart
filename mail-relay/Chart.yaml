@@ -1,0 +1,18 @@
+apiVersion: v2
+name: mail-relay
+description: A Helm chart for deploying a mail relay server with Postfix and OpenDKIM
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - mail
+  - postfix
+  - dkim
+  - relay
+  - smtp
+home: https://github.com/lnking81/mail-relay-chart
+sources:
+  - https://github.com/lnking81/mail-relay-chart
+maintainers:
+  - name: lnking81
+    email: ilya@strukov.net
