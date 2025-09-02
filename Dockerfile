@@ -27,8 +27,8 @@ RUN mkdir -p /var/spool/postfix \
     && mkdir -p /var/run/opendkim \
     && mkdir -p /data/dkim-keys
 
-# Create opendkim user
-RUN useradd -r -d /var/lib/opendkim -s /bin/false opendkim
+# Create opendkim user if it doesn't exist (it's usually created by the opendkim package)
+RUN id -u opendkim >/dev/null 2>&1 || useradd -r -d /var/lib/opendkim -s /bin/false opendkim
 
 # Set up permissions
 RUN chown -R opendkim:opendkim /etc/opendkim/keys/ \
