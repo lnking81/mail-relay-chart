@@ -13,7 +13,7 @@ A production-ready Helm chart for deploying a secure SMTP mail relay server on K
 - **📊 Logging**: Direct stdout logging with supervisord process management
 - **🐳 Containerized**: Supervisord-managed services with environment variable configuration## 📋 Architecture
 
-````mermaid
+```mermaid
 graph TB
     A[Applications] --> B[Mail Relay Pod]
     B --> C[External SMTP Provider]
@@ -33,7 +33,9 @@ graph TB
     F --> D
     F --> E
     D --> E
-```## ⚡ Quick Start
+```
+
+## ⚡ Quick Start
 
 ### Prerequisites
 
@@ -49,7 +51,7 @@ graph TB
 ```bash
 git clone https://github.com/lnking81/mail-relay-chart.git
 cd mail-relay-chart
-````
+```
 
 2. **Configure your values**:
 
