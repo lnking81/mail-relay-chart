@@ -97,10 +97,11 @@ if [ "${PERSISTENCE_ENABLED:-false}" = "true" ]; then
 
     # Fix all permissions recursively for persistent storage
     echo "$(date): Fixing persistent storage permissions..."
-    chown -R postfix:postfix /data/postfix-spool
-
-    # Fix specific directory permissions that Postfix requires
-    chown root:root /data/postfix-spool
+    
+    # Set the base directory ownership to postfix
+    chown postfix:postfix /data/postfix-spool
+    
+    # Fix permissions for special directories that need root ownership
     chown root:root /data/postfix-spool/pid 2>/dev/null || true
     chown root:postdrop /data/postfix-spool/public 2>/dev/null || true
     chown root:postdrop /data/postfix-spool/maildrop 2>/dev/null || true
@@ -114,6 +115,14 @@ if [ "${PERSISTENCE_ENABLED:-false}" = "true" ]; then
     if [ -d "/data/postfix-spool/usr" ]; then
         chown -R root:root /data/postfix-spool/usr
     fi
+    
+    # Ensure all queue directories are owned by postfix:postfix
+    for dir in active bounce corrupt defer deferred flush hold incoming private saved trace; do
+        if [ -d "/data/postfix-spool/$dir" ]; then
+            chown postfix:postfix "/data/postfix-spool/$dir"
+            chmod 700 "/data/postfix-spool/$dir"
+        fi
+    done
 
     # Set proper permissions on the symlink itself
     chown -h postfix:postfix /var/spool/postfix
