@@ -15,6 +15,9 @@ data:
     inet_interfaces = all
     inet_protocols = ipv4
 
+    # Logging configuration - direct to stdout for containers
+    maillog_file = /dev/stdout
+
     # Relay configuration - disable local delivery, relay only
     {{- if .Values.mail.relayHost }}
     relayhost = {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }}

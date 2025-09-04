@@ -100,72 +100,12 @@ if [ "${PERSISTENCE_ENABLED:-false}" = "true" ]; then
     echo "$(date): Persistent queue setup completed"
 fi
 
-# Start rsyslog with configuration to forward to stdout
-echo "$(date): Starting rsyslog with stdout forwarding..."
-cat > /etc/rsyslog.d/49-stdout.conf << 'EOF'
-# Forward mail logs to stdout
-mail.*                          /proc/1/fd/1
-# Also log to files for compatibility
-mail.*                          -/var/log/mail.log
-EOF
+# Create supervisor directories
+mkdir -p /var/log/supervisor
 
-rsyslogd -n &
-RSYSLOG_PID=$!
+echo "$(date): Starting supervisord to manage mail relay services..."
+echo "=== Services will be managed by supervisord ==="
+echo "=== Postfix will log directly to stdout ==="
 
-# Give rsyslog a moment to start
-sleep 2
-echo "$(date): Rsyslog started with PID $RSYSLOG_PID"
-
-# Start OpenDKIM if enabled
-if [ "${DKIM_ENABLED:-false}" = "true" ]; then
-    echo "$(date): Starting OpenDKIM with stdout logging..."
-    opendkim -f -v &
-    OPENDKIM_PID=$!
-
-    # Wait for OpenDKIM to start
-    sleep 5
-    echo "$(date): OpenDKIM started with PID $OPENDKIM_PID"
-fi
-
-# Start Postfix with foreground logging
-echo "$(date): Starting Postfix with stdout logging..."
-/usr/sbin/postfix start-fg &
-POSTFIX_PID=$!
-echo "$(date): Postfix started with PID $POSTFIX_PID"
-
-# Start a log monitoring process to ensure all logs go to stdout
-echo "$(date): Starting log monitoring..."
-(
-    # Monitor mail logs and forward to stdout
-    tail -F /var/log/mail.log /var/log/maillog /var/log/messages 2>/dev/null | while read line; do
-        echo "[MAIL-LOG] $line"
-    done
-) &
-LOG_MONITOR_PID=$!
-
-# Function to handle shutdown
-shutdown() {
-    echo "$(date): Shutting down mail relay services..."
-    if [ "${DKIM_ENABLED:-false}" = "true" ] && [ -n "${OPENDKIM_PID:-}" ]; then
-        echo "$(date): Stopping OpenDKIM..."
-        kill $OPENDKIM_PID 2>/dev/null || true
-    fi
-    echo "$(date): Stopping Postfix..."
-    /usr/sbin/postfix stop
-    kill $POSTFIX_PID 2>/dev/null || true
-    echo "$(date): Stopping log monitor..."
-    kill $LOG_MONITOR_PID 2>/dev/null || true
-    echo "$(date): Stopping rsyslog..."
-    kill $RSYSLOG_PID 2>/dev/null || true
-    echo "$(date): Mail relay shutdown complete"
-    exit 0
-}
-
-# Set up signal handlers
-trap 'shutdown' SIGTERM SIGINT
-
-echo "$(date): Mail relay services started successfully"
-echo "=== Monitoring mail relay processes ==="
-
-# Wait for processes
-wait $POSTFIX_PID
+# Start supervisord which will manage all services
+exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf

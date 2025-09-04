@@ -17,8 +17,9 @@ data:
     # Process configuration
     pidfile /run/opendkim/opendkim.pid
 
-    # Log to syslog
-    Syslog                  yes
+    # Logging configuration - disable syslog for container
+    Syslog                  no
+
     # Required to use local socket with MTAs that access the socket as a non-
     # privileged user (e.g. Postfix)
     UMask                   002

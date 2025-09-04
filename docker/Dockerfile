@@ -7,7 +7,7 @@ RUN apt-get update && \
     postfix \
     opendkim \
     opendkim-tools \
-    rsyslog \
+    supervisor \
     ca-certificates \
     curl \
     # DNS and networking tools for troubleshooting
@@ -47,10 +47,10 @@ RUN chown -R opendkim:opendkim /etc/opendkim/keys/ \
     && chmod -R 700 /etc/opendkim/keys/ \
     && chown -R opendkim:opendkim /var/run/opendkim \
     && chown -R postfix:postfix /var/spool/postfix \
-    && chown -R syslog:adm /var/spool/rsyslog \
-    && chmod 755 /var/spool/rsyslog \
-    && chmod 644 /var/log/* 2>/dev/null || true \
     && mkdir -p /var/log && chmod 755 /var/log
+
+# Copy supervisord configuration
+COPY supervisord.conf /etc/supervisor/supervisord.conf
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

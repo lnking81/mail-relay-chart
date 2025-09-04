@@ -10,12 +10,10 @@ A production-ready Helm chart for deploying a secure SMTP mail relay server on K
 - **💾 Persistent Storage**: Optional persistent storage for mail queue and DKIM keys
 - **❤️ Health Monitoring**: Built-in health checks and TCP probes
 - **🔒 Security**: Network policies, RBAC, and security contexts
-- **📊 Logging**: Structured logging with stdout forwarding
-- **🐳 Containerized**: Clean entrypoint-based architecture with environment variables
+- **📊 Logging**: Direct stdout logging with supervisord process management
+- **🐳 Containerized**: Supervisord-managed services with environment variable configuration## 📋 Architecture
 
-## 📋 Architecture
-
-```mermaid
+````mermaid
 graph TB
     A[Applications] --> B[Mail Relay Pod]
     B --> C[External SMTP Provider]
@@ -23,19 +21,19 @@ graph TB
     subgraph "Mail Relay Pod"
         D[Postfix SMTP]
         E[OpenDKIM]
-        F[Entrypoint Script]
+        F[Supervisord]
+        G[Entrypoint Script]
     end
 
-    B --> G[Persistent Storage]
-    H[External DNS] --> I[DNS Provider]
-    B -.-> H
+    B --> H[Persistent Storage]
+    I[External DNS] --> J[DNS Provider]
+    B -.-> I
 
-    D --> E
+    G --> F
     F --> D
     F --> E
-```
-
-## ⚡ Quick Start
+    D --> E
+```## ⚡ Quick Start
 
 ### Prerequisites
 
@@ -51,7 +49,7 @@ graph TB
 ```bash
 git clone https://github.com/lnking81/mail-relay-chart.git
 cd mail-relay-chart
-```
+````
 
 2. **Configure your values**:
 
@@ -150,6 +148,25 @@ The container uses environment variables for configuration:
 | `RELAY_CREDENTIALS_ENABLED` | Enable SMTP auth        | `mail.relayCredentials.enabled` |
 | `SENDER_ACCESS_ENABLED`     | Enable sender access    | `mail.senderAccess.enabled`     |
 | `PERSISTENCE_ENABLED`       | Enable persistence      | `persistence.enabled`           |
+
+### Process Management
+
+The container uses **supervisord** for robust process management:
+
+| Service    | Purpose                 | Startup Priority | Auto-restart |
+| ---------- | ----------------------- | ---------------- | ------------ |
+| `opendkim` | DKIM email signing      | 100              | ✅           |
+| `postfix`  | SMTP mail relay service | 200              | ✅           |
+
+### Logging Architecture
+
+**Direct stdout logging** without intermediate services:
+
+```
+Postfix   → stdout (via maillog_file = /dev/stdout)
+OpenDKIM  → stdout (via -f -v flags, Syslog = no)
+Supervisord → Container stdout/stderr
+```
 
 ### Building Custom Image
 
@@ -266,9 +283,24 @@ kubectl describe pod -n mail -l app.kubernetes.io/name=mail-relay
 
 # Check container logs
 kubectl logs -n mail deployment/my-mail-relay --previous
+
+# Check individual service status via supervisord
+kubectl exec -n mail deployment/my-mail-relay -- supervisorctl status
 ```
 
-#### 2. SMTP Connection Problems
+#### 2. Service Management
+
+```bash
+# Restart individual services without restarting container
+kubectl exec -n mail deployment/my-mail-relay -- supervisorctl restart postfix
+kubectl exec -n mail deployment/my-mail-relay -- supervisorctl restart opendkim
+
+# Check service logs
+kubectl exec -n mail deployment/my-mail-relay -- supervisorctl tail postfix
+kubectl exec -n mail deployment/my-mail-relay -- supervisorctl tail opendkim
+```
+
+#### 3. SMTP Connection Problems
 
 ```bash
 # Test from within cluster
@@ -353,6 +385,7 @@ kubectl delete namespace mail
 ```
 mail-relay-chart/
 ├── README.md                    # This file
+├── LICENSE                     # MIT License
 ├── values.byc.yaml             # Example values file
 ├── chart/                      # Helm chart
 │   ├── Chart.yaml
@@ -362,8 +395,9 @@ mail-relay-chart/
 │       ├── configmap-*.yaml
 │       └── ...
 └── docker/                     # Container build context
-    ├── Dockerfile              # Multi-stage container build
-    └── entrypoint.sh           # Environment-driven startup script
+    ├── Dockerfile              # Debian 13 based image
+    ├── supervisord.conf        # Process management config
+    └── entrypoint.sh           # Environment-driven setup script
 ```
 
 ### Contributing
