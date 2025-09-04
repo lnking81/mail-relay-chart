@@ -102,7 +102,7 @@ spec:
             - name: DKIM_KEY_SIZE
               value: "{{ .Values.dkim.keySize }}"
             - name: DKIM_SELECTOR
-              value: "{{ .Values.mail.domains.0.dkimSelector | default "mail" }}"
+              value: "{{ (index .Values.mail.domains 0).dkimSelector | default "mail" }}"
             - name: DKIM_DOMAINS
               value: "{{ range $index, $domain := .Values.mail.domains }}{{ if $index }},{{ end }}{{ $domain.name }}{{ end }}"
             {{- else }}
