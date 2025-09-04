@@ -1,0 +1,203 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mail-relay.fullname" . }}
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "mail-relay.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/postfix-config: {{ include (print $.Template.BasePath "/configmap-postfix.yaml") . | sha256sum }}
+        {{- if .Values.dkim.enabled }}
+        checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "mail-relay.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+        - name: ip-detector
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: curlimages/curl:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Detecting external IP address..."
+
+              # Try multiple services to detect external IP
+              for service in "https://ifconfig.me/ip" "https://icanhazip.com" "https://ipv4.icanhazip.com"; do
+                echo "Trying $service..."
+                if IP=$(curl -s --connect-timeout 10 --max-time 30 "$service" 2>/dev/null); then
+                  if echo "$IP" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' >/dev/null; then
+                    echo "Detected external IP: $IP"
+                    echo "$IP" > /shared/external-ip
+                    echo "$(date): External IP detected as $IP" >> /shared/ip-detection.log
+                    exit 0
+                  fi
+                fi
+                echo "Failed to get valid IP from $service"
+              done
+
+              echo "ERROR: Could not detect external IP address"
+              echo "$(date): Failed to detect external IP" >> /shared/ip-detection.log
+              echo "unknown" > /shared/external-ip
+              exit 1
+          volumeMounts:
+            - name: shared-data
+              mountPath: /shared
+        {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: HEADER_CHECKS_ENABLED
+              value: "{{ .Values.mail.headerChecks.enabled }}"
+            {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
+            - name: RELAY_CREDENTIALS_ENABLED
+              value: "true"
+            {{- else }}
+            - name: RELAY_CREDENTIALS_ENABLED
+              value: "false"
+            {{- end }}
+            {{- if and .Values.mail.senderAccess .Values.mail.senderAccess.enabled }}
+            - name: SENDER_ACCESS_ENABLED
+              value: "true"
+            {{- else }}
+            - name: SENDER_ACCESS_ENABLED
+              value: "false"
+            {{- end }}
+            {{- if .Values.dkim.enabled }}
+            - name: DKIM_ENABLED
+              value: "true"
+            {{- if .Values.dkim.autoGenerate }}
+            - name: DKIM_AUTO_GENERATE
+              value: "true"
+            - name: DKIM_KEY_SIZE
+              value: "{{ .Values.dkim.keySize }}"
+            - name: DKIM_SELECTOR
+              value: "{{ .Values.mail.domains.0.dkimSelector | default "mail" }}"
+            - name: DKIM_DOMAINS
+              value: "{{ range $index, $domain := .Values.mail.domains }}{{ if $index }},{{ end }}{{ $domain.name }}{{ end }}"
+            {{- else }}
+            - name: DKIM_AUTO_GENERATE
+              value: "false"
+            {{- end }}
+            {{- else }}
+            - name: DKIM_ENABLED
+              value: "false"
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: PERSISTENCE_ENABLED
+              value: "true"
+            {{- else }}
+            - name: PERSISTENCE_ENABLED
+              value: "false"
+            {{- end }}
+          ports:
+            - name: smtp
+              containerPort: {{ .Values.service.ports.smtp.port }}
+              protocol: TCP
+          {{- if .Values.healthCheck.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.failureThreshold }}
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            successThreshold: {{ .Values.healthCheck.successThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: postfix-config
+              mountPath: /tmp/postfix-config
+            - name: rsyslog-config
+              mountPath: /etc/rsyslog.conf
+              subPath: rsyslog.conf
+            {{- if .Values.dkim.enabled }}
+            - name: opendkim-config
+              mountPath: /tmp/opendkim-config
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+            - name: shared-data
+              mountPath: /shared
+            {{- end }}
+      volumes:
+        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+        - name: shared-data
+          emptyDir: {}
+        {{- end }}
+        - name: postfix-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-postfix-config
+        - name: rsyslog-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-rsyslog
+        {{- if .Values.dkim.enabled }}
+        - name: opendkim-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-opendkim-config
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          {{- if .Values.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "mail-relay.fullname" . }}-data
+          {{- end }}
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -15,33 +15,29 @@ data:
     inet_interfaces = all
     inet_protocols = ipv4
 
-    # Destination configuration
-    mydestination = $myhostname, localhost.$mydomain, localhost
-
-    # Relay configuration
-    mynetworks = {{ range .Values.mail.trustedNetworks }}{{ . }}, {{ end }}{{ range .Values.mail.trustedIPs }}{{ . }}, {{ end }}127.0.0.0/8
-
+    # Relay configuration - disable local delivery, relay only
     {{- if .Values.mail.relayHost }}
     relayhost = {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }}
-    {{- if .Values.mail.relayCredentials.enabled }}
+    {{- else }}
+    relayhost =
+    {{- end }}
+
+    # Disable local delivery completely
+    mydestination =
+    local_recipient_maps =
+    local_transport = error:local delivery is disabled
+
+    # Trusted networks configuration
+    mynetworks = {{ range .Values.mail.trustedNetworks }}{{ . }}, {{ end }}{{ range .Values.mail.trustedIPs }}{{ . }}, {{ end }}127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
+
+    {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayHost }}
+    # SASL authentication for relay
     smtp_sasl_auth_enable = yes
     smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
     smtp_sasl_security_options = noanonymous
     smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
     smtp_use_tls = yes
     {{- end }}
-    {{- end }}
-
-    # Message size limit
-    message_size_limit = {{ .Values.mail.messageSizeLimit | default "50MB" | replace "MB" "000000" | replace "KB" "000" | replace "GB" "000000000" }}
-
-    # Security settings
-    smtpd_banner = $myhostname ESMTP
-    disable_vrfy_command = yes
-    smtpd_helo_required = yes
-    smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname, permit
-    smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, reject_unknown_sender_domain, permit
-    smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination, permit
 
     # DKIM configuration
     {{- if .Values.dkim.enabled }}
@@ -49,12 +45,44 @@ data:
     milter_protocol = 2
     smtpd_milters = inet:localhost:8891
     non_smtpd_milters = inet:localhost:8891
+    milter_macro_daemon_name = ORIGINATING
     {{- end }}
+
+    # TLS settings
+    smtp_tls_security_level = may
+
+    # Logging configuration
+    {{- if eq .Values.mail.logDestination "file" }}
+    maillog_file = /var/log/mail.log
+    {{- else }}
+    maillog_file = /dev/stdout
+    maillog_file_prefixes = /dev
+    {{- end }}
+
+    # Relay restrictions
+    smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
 
     # Header checks
     {{- if .Values.mail.headerChecks.enabled }}
     header_checks = regexp:/etc/postfix/header_checks
     {{- end }}
+
+    # Sender restrictions with optional sender access control
+    {{- if and .Values.mail.senderAccess .Values.mail.senderAccess.enabled }}
+    smtpd_sender_restrictions = check_sender_access hash:/etc/postfix/sender_access, reject_non_fqdn_sender, reject_unknown_sender_domain, permit
+    {{- else }}
+    smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, reject_unknown_sender_domain, permit
+    {{- end }}
+
+    # Message size limit
+    message_size_limit = {{ .Values.mail.messageSizeLimit | default "50MB" | replace "MB" "000000" | replace "KB" "000" | replace "GB" "000000000" }}
+
+    # Additional security settings
+    smtpd_banner = $myhostname ESMTP
+    disable_vrfy_command = yes
+    smtpd_helo_required = yes
+    smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname, permit
+    smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination, permit
 
     # Compatibility settings
     compatibility_level = 2
@@ -63,29 +91,25 @@ data:
     maximal_queue_lifetime = 1d
     bounce_queue_lifetime = 1d
 
-    # TLS settings
-    smtp_tls_note_starttls_offer = yes
-    smtp_tls_security_level = may
-    smtpd_tls_security_level = may
-    smtpd_tls_received_header = yes
+    # DNS resolver settings for containerized environments
+    smtp_dns_support_level = enabled
+    disable_dns_lookups = no
+    smtp_host_lookup = dns
 
   master.cf: |
+    #
+    # Postfix master process configuration file.  For details on the format
+    # of the file, see the master(5) manual page (command: "man 5 master" or
+    # on-line: http://www.postfix.org/master.5.html).
+    #
+    # Do not forget to execute "postfix reload" after editing this file.
+    #
     # ==========================================================================
     # service type  private unpriv  chroot  wakeup  maxproc command + args
-    #               (yes)   (yes)   (yes)   (never) (100)
+    #               (yes)   (yes)   (no)    (never) (100)
     # ==========================================================================
     smtp      inet  n       -       y       -       -       smtpd
-    submission inet n       -       y       -       -       smtpd
-      -o syslog_name=postfix/submission
-      -o smtpd_tls_security_level=encrypt
-      -o smtpd_sasl_auth_enable=yes
-      -o smtpd_client_restrictions=permit_sasl_authenticated,reject
-
-    # Custom relay port (based on your configuration)
     {{ .Values.service.ports.smtp.port }}      inet  n       -       y       -       -       smtpd
-      -o syslog_name=postfix/relay
-      -o smtpd_client_restrictions=permit_mynetworks,reject
-
     pickup    unix  n       -       y       60      1       pickup
     cleanup   unix  n       -       y       -       0       cleanup
     qmgr      unix  n       -       n       300     1       qmgr
@@ -100,6 +124,7 @@ data:
     proxywrite unix -       -       n       -       1       proxymap
     smtp      unix  -       -       y       -       -       smtp
     relay     unix  -       -       y       -       -       smtp
+            -o syslog_name=postfix/$service_name
     showq     unix  n       -       y       -       -       showq
     error     unix  -       -       y       -       -       error
     retry     unix  -       -       y       -       -       error
@@ -109,6 +134,11 @@ data:
     lmtp      unix  -       -       y       -       -       lmtp
     anvil     unix  -       -       y       -       1       anvil
     scache    unix  -       -       y       -       1       scache
+    postlog   unix-dgram n  -       n       -       1       postlogd
+
+    # External delivery methods
+    uucp      unix  -       n       n       -       -       pipe
+      flags=Fqhu user=uucp argv=uux -r -n -z -a$sender - $nexthop!rmail ($recipient)
 
   {{- if .Values.mail.headerChecks.enabled }}
   header_checks: |
@@ -128,4 +158,14 @@ data:
   {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
   sasl_passwd: |
     {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }} {{ .Values.mail.relayCredentials.username }}:{{ .Values.mail.relayCredentials.password }}
+  {{- end }}
+
+  {{- if and .Values.mail.senderAccess .Values.mail.senderAccess.enabled }}
+  sender_access: |
+    {{- range .Values.mail.senderAccess.allowedSenders }}
+    {{ . }} OK
+    {{- end }}
+    {{- range .Values.mail.senderAccess.rejectedSenders }}
+    {{ . }} REJECT
+    {{- end }}
   {{- end }}

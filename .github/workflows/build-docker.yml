@@ -6,14 +6,16 @@ on:
       - main
       - master
     paths:
-      - "Dockerfile"
+      - "docker/Dockerfile"
+      - "docker/entrypoint.sh"
       - ".github/workflows/build-docker.yml"
   pull_request:
     branches:
       - main
       - master
     paths:
-      - "Dockerfile"
+      - "docker/Dockerfile"
+      - "docker/entrypoint.sh"
       - ".github/workflows/build-docker.yml"
 
 env:
@@ -55,8 +57,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./docker
+          file: ./docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -17,7 +17,7 @@ spec:
             {{- include "mail-relay.selectorLabels" . | nindent 12 }}
             job: dns-manager
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
           serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
           containers:
           - name: dns-manager

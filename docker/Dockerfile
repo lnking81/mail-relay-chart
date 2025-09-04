@@ -1,5 +1,5 @@
 # Custom mail relay image with pre-installed packages
-FROM debian:12-slim
+FROM debian:13-slim
 
 # Install all required packages in one layer
 RUN apt-get update && \
@@ -52,7 +52,11 @@ RUN chown -R opendkim:opendkim /etc/opendkim/keys/ \
     && chmod 644 /var/log/* 2>/dev/null || true \
     && mkdir -p /var/log && chmod 755 /var/log
 
+# Copy entrypoint script
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 EXPOSE 25
 
-# Default command
-CMD ["/bin/bash"]
+# Use the entrypoint script
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
