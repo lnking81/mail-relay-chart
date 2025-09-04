@@ -65,6 +65,9 @@ if [ "${DKIM_ENABLED:-false}" = "true" ]; then
     fi
 
     # Set permissions for OpenDKIM
+    chown -R opendkim:opendkim /data/dkim-keys/ 2>/dev/null || true
+    chmod -R 600 /data/dkim-keys/*.private 2>/dev/null || true
+    chmod -R 644 /data/dkim-keys/*.txt 2>/dev/null || true
     chown -R opendkim:opendkim /etc/opendkim/keys/ 2>/dev/null || true
     chmod -R 700 /etc/opendkim/keys/ 2>/dev/null || true
     mkdir -p /var/run/opendkim
