@@ -73,6 +73,7 @@ if [ "${DKIM_ENABLED:-false}" = "true" ]; then
 fi
 
 # Set up postfix permissions
+echo "$(date): Setting up Postfix permissions..."
 chown -R postfix:postfix /var/spool/postfix
 
 # Set up persistent Postfix queue if enabled
@@ -95,9 +96,13 @@ if [ "${PERSISTENCE_ENABLED:-false}" = "true" ]; then
     rm -rf /var/spool/postfix
     ln -sf /data/postfix-spool /var/spool/postfix
 
-    # Set proper permissions
+    # Set proper permissions for both the data directory and the symlink
     chown -R postfix:postfix /data/postfix-spool
+    chown -h postfix:postfix /var/spool/postfix
     echo "$(date): Persistent queue setup completed"
+else
+    # Ensure proper ownership for non-persistent setup
+    chown -R postfix:postfix /var/spool/postfix
 fi
 
 # Create supervisor directories

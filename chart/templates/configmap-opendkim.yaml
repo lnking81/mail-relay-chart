@@ -35,7 +35,7 @@ data:
     SubDomains              no
 
     # Socket for Postfix to connect to
-    Socket                  inet:8891@localhost
+    Socket                  inet:8891@127.0.0.1
 
   TrustedHosts: |
 {{- include "mail-relay.trustedHosts" . | nindent 4 }}

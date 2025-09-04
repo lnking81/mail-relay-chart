@@ -126,15 +126,58 @@ spec:
               protocol: TCP
           {{- if .Values.healthCheck.enabled }}
           livenessProbe:
-            tcpSocket:
-              port: smtp
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  # Check that all services managed by supervisord are running
+                  # If supervisorctl fails, supervisord is not running
+                  if ! supervisorctl status >/dev/null 2>&1; then
+                    echo "supervisord not running"
+                    exit 1
+                  fi
+
+                  # Check that all services are in RUNNING state
+                  if supervisorctl status | grep -v RUNNING | grep -q .; then
+                    echo "Some services are not running:"
+                    supervisorctl status | grep -v RUNNING
+                    exit 1
+                  else
+                    # All services are RUNNING
+                    exit 0
+                  fi
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.periodSeconds }}
             timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
             failureThreshold: {{ .Values.healthCheck.failureThreshold }}
           readinessProbe:
-            tcpSocket:
-              port: smtp
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  # Check that all services managed by supervisord are running
+                  # If supervisorctl fails, supervisord is not running
+                  if ! supervisorctl status >/dev/null 2>&1; then
+                    echo "supervisord not running"
+                    exit 1
+                  fi
+
+                  # Check that all services are in RUNNING state
+                  if supervisorctl status | grep -v RUNNING | grep -q .; then
+                    echo "Some services are not running:"
+                    supervisorctl status | grep -v RUNNING
+                    exit 1
+                  else
+                    # Additional check: verify SMTP port is accepting connections
+                    if nc -z localhost {{ .Values.service.ports.smtp.port }}; then
+                      exit 0
+                    else
+                      echo "SMTP port not accepting connections"
+                      exit 1
+                    fi
+                  fi
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.periodSeconds }}
             timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}

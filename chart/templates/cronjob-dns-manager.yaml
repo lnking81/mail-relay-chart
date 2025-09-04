@@ -9,8 +9,10 @@ spec:
   schedule: "*/{{ .Values.externalDns.ipCheckInterval | default 5 }} * * * *"
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      backoffLimit: 0
       template:
         metadata:
           labels:
@@ -26,7 +28,8 @@ spec:
             - /bin/bash
             - -c
             - |
-              set -e
+              # Don't exit on errors - log them instead
+              # set -e
 
               echo "🔄 DNS Manager CronJob - $(date)"
               echo "======================================"
@@ -35,8 +38,9 @@ spec:
               POD_NAME=$(kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} | grep -E "{{ include "mail-relay.fullname" . }}-[a-f0-9]" | head -1 | awk '{print $1}' 2>/dev/null)
 
               if [ -z "$POD_NAME" ]; then
-                echo "❌ Mail relay pod not found"
-                exit 1
+                echo "❌ Mail relay pod not found - will retry on next schedule"
+                echo "🎉 DNS management completed with warnings - $(date)"
+                exit 0
               fi
 
               echo "📧 Found mail relay pod: $POD_NAME"
@@ -58,8 +62,9 @@ spec:
               done
 
               if [ -z "$CURRENT_IP" ]; then
-                echo "❌ Failed to detect outbound IP"
-                exit 1
+                echo "❌ Failed to detect outbound IP - will retry on next schedule"
+                echo "🎉 DNS management completed with warnings - $(date)"
+                exit 0
               fi
 
               # Check each DNSEndpoint and create/update if needed

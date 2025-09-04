@@ -46,8 +46,8 @@ data:
     {{- if .Values.dkim.enabled }}
     milter_default_action = accept
     milter_protocol = 2
-    smtpd_milters = inet:localhost:8891
-    non_smtpd_milters = inet:localhost:8891
+    smtpd_milters = inet:127.0.0.1:8891
+    non_smtpd_milters = inet:127.0.0.1:8891
     milter_macro_daemon_name = ORIGINATING
     {{- end }}
 
@@ -88,7 +88,7 @@ data:
     smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination, permit
 
     # Compatibility settings
-    compatibility_level = 2
+    compatibility_level = 3.6
 
     # Queue settings
     maximal_queue_lifetime = 1d
@@ -96,7 +96,6 @@ data:
 
     # DNS resolver settings for containerized environments
     smtp_dns_support_level = enabled
-    disable_dns_lookups = no
     smtp_host_lookup = dns
 
   master.cf: |
@@ -146,12 +145,12 @@ data:
   {{- if .Values.mail.headerChecks.enabled }}
   header_checks: |
     {{- if .Values.mail.headerChecks.ignoreForeignReceivedHeaders }}
-    # Ignore Received headers not from configured domains
+    # Simple header cleaning rules
+    /^Received:\s+from\s+localhost/ OK
+    /^Received:\s+from\s+{{ .Values.mail.hostname | replace "." "\\." }}/ OK
     {{- range .Values.mail.domains }}
-    /^Received: from (?!.*{{ .name | replace "." "\\." }}).*/ IGNORE
+    /^Received:\s+from\s+.*{{ .name | replace "." "\\." }}/ OK
     {{- end }}
-    # Ignore Received headers not from mail hostname
-    /^Received: from (?!{{ $.Values.mail.hostname | replace "." "\\." }}).*/ IGNORE
     {{- end }}
     {{- range .Values.mail.headerChecks.rules }}
     {{ tpl .pattern $ }} {{ .action }}
