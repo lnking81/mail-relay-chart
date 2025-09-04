@@ -74,7 +74,6 @@ fi
 
 # Set up postfix permissions
 echo "$(date): Setting up Postfix permissions..."
-chown -R postfix:postfix /var/spool/postfix
 
 # Set up persistent Postfix queue if enabled
 if [ "${PERSISTENCE_ENABLED:-false}" = "true" ]; then
@@ -96,8 +95,27 @@ if [ "${PERSISTENCE_ENABLED:-false}" = "true" ]; then
     rm -rf /var/spool/postfix
     ln -sf /data/postfix-spool /var/spool/postfix
 
-    # Set proper permissions for both the data directory and the symlink
+    # Fix all permissions recursively for persistent storage
+    echo "$(date): Fixing persistent storage permissions..."
     chown -R postfix:postfix /data/postfix-spool
+
+    # Fix specific directory permissions that Postfix requires
+    chown root:root /data/postfix-spool
+    chown root:root /data/postfix-spool/pid 2>/dev/null || true
+    chown root:postdrop /data/postfix-spool/public 2>/dev/null || true
+    chown root:postdrop /data/postfix-spool/maildrop 2>/dev/null || true
+
+    # Fix permissions for etc subdirectory
+    if [ -d "/data/postfix-spool/etc" ]; then
+        chown -R root:root /data/postfix-spool/etc
+    fi
+
+    # Fix permissions for usr subdirectory
+    if [ -d "/data/postfix-spool/usr" ]; then
+        chown -R root:root /data/postfix-spool/usr
+    fi
+
+    # Set proper permissions on the symlink itself
     chown -h postfix:postfix /var/spool/postfix
     echo "$(date): Persistent queue setup completed"
 else
