@@ -10,14 +10,38 @@ RUN apt-get update && \
     supervisor \
     ca-certificates \
     curl \
+    wget \
     # DNS and networking tools for troubleshooting
     dnsutils \
     iputils-ping \
     telnet \
     netcat-openbsd \
     nmap \
-    # Debugging tools
+    tcpdump \
+    # System debugging tools
     strace \
+    ltrace \
+    gdb \
+    # Process and system monitoring
+    htop \
+    psmisc \
+    procps \
+    lsof \
+    # Network debugging
+    net-tools \
+    iproute2 \
+    # Text processing and utilities
+    vim \
+    nano \
+    less \
+    tree \
+    jq \
+    # File and permission debugging
+    acl \
+    attr \
+    # Mail testing tools
+    swaks \
+    mailutils \
     # Add kubectl for DNS management
     && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
     && chmod +x kubectl \

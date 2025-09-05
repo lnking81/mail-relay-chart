@@ -18,6 +18,9 @@ spec:
         {{- if .Values.dkim.enabled }}
         checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
         {{- end }}
+        {{- if .Values.dnsHelper.enabled }}
+        checksum/dns-helper-config: {{ include (print $.Template.BasePath "/configmap-dns-helper.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
