@@ -290,7 +290,14 @@ kubectl logs -n mail deployment/my-mail-relay --previous
 kubectl exec -n mail deployment/my-mail-relay -- supervisorctl status
 ```
 
-#### 2. Service Management
+#### 2. Postfix Permission Errors
+
+```bash
+# If permissions are wrong, restart the pod to trigger permission rebuild
+kubectl rollout restart -n mail deployment/my-mail-relay
+```
+
+#### 3. Service Management
 
 ```bash
 # Restart individual services without restarting container
@@ -302,7 +309,7 @@ kubectl exec -n mail deployment/my-mail-relay -- supervisorctl tail postfix
 kubectl exec -n mail deployment/my-mail-relay -- supervisorctl tail opendkim
 ```
 
-#### 3. SMTP Connection Problems
+#### 4. SMTP Connection Problems
 
 ```bash
 # Test from within cluster
@@ -310,7 +317,7 @@ kubectl run test-pod --rm -it --image=busybox -- sh
 # > telnet my-mail-relay.mail.svc.cluster.local 25
 ```
 
-#### 3. DKIM Key Issues
+#### 5. DKIM Key Issues
 
 ```bash
 # Check DKIM directory

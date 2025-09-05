@@ -34,20 +34,6 @@ spec:
       serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      # Use external DNS servers for mail delivery
-      dnsPolicy: "None"
-      dnsConfig:
-        nameservers:
-          - "8.8.8.8"
-          - "8.8.4.4"
-          - "1.1.1.1"
-        searches:
-          - "mail.svc.cluster.local"
-          - "svc.cluster.local"
-          - "cluster.local"
-        options:
-          - name: "ndots"
-            value: "5"
       initContainers:
         {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
         - name: ip-detector
@@ -202,9 +188,6 @@ spec:
           volumeMounts:
             - name: postfix-config
               mountPath: /tmp/postfix-config
-            - name: rsyslog-config
-              mountPath: /etc/rsyslog.conf
-              subPath: rsyslog.conf
             {{- if .Values.dkim.enabled }}
             - name: opendkim-config
               mountPath: /tmp/opendkim-config
@@ -225,9 +208,6 @@ spec:
         - name: postfix-config
           configMap:
             name: {{ include "mail-relay.fullname" . }}-postfix-config
-        - name: rsyslog-config
-          configMap:
-            name: {{ include "mail-relay.fullname" . }}-rsyslog
         {{- if .Values.dkim.enabled }}
         - name: opendkim-config
           configMap:

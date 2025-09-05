@@ -31,30 +31,24 @@ RUN mkdir -p /var/spool/postfix \
     && mkdir -p /var/log \
     && mkdir -p /etc/opendkim/keys \
     && mkdir -p /var/run/opendkim \
-    && mkdir -p /data/dkim-keys \
-    && mkdir -p /var/spool/rsyslog
+    && mkdir -p /data/dkim-keys
+
+# Ensure required groups exist
+RUN getent group postfix >/dev/null 2>&1 || groupadd -r postfix \
+    && getent group postdrop >/dev/null 2>&1 || groupadd -r postdrop
 
 # Create opendkim user if it doesn't exist (it's usually created by the opendkim package)
 RUN id -u opendkim >/dev/null 2>&1 || useradd -r -d /var/lib/opendkim -s /bin/false opendkim
 
-# Create syslog user and group if they don't exist (for rsyslog)
-RUN id -u syslog >/dev/null 2>&1 || useradd -r -d /var/log -s /bin/false syslog \
-    && getent group adm >/dev/null 2>&1 || groupadd adm \
-    && usermod -a -G adm syslog
-
-# Set up permissions
+# Set up initial permissions (will be properly configured by entrypoint)
 RUN chown -R opendkim:opendkim /etc/opendkim/keys/ \
     && chmod -R 700 /etc/opendkim/keys/ \
     && chown -R opendkim:opendkim /var/run/opendkim \
-    && chown -R postfix:postfix /var/spool/postfix \
-    && mkdir -p /var/log && chmod 755 /var/log
+    && mkdir -p /var/log && chmod 755 /var/log \
+    && echo "Initial permissions set - entrypoint will configure Postfix directories properly"
 
-# Copy supervisord configuration
-COPY supervisord.conf /etc/supervisor/supervisord.conf
-
-# Copy entrypoint script
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Copy all files
+COPY . /
 
 EXPOSE 25
 
