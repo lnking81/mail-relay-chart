@@ -16,6 +16,8 @@ RUN apt-get update && \
     telnet \
     netcat-openbsd \
     nmap \
+    # Debugging tools
+    strace \
     # Add kubectl for DNS management
     && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
     && chmod +x kubectl \

@@ -6,16 +6,14 @@ on:
       - main
       - master
     paths:
-      - "docker/Dockerfile"
-      - "docker/entrypoint.sh"
+      - "docker/**"
       - ".github/workflows/build-docker.yml"
   pull_request:
     branches:
       - main
       - master
     paths:
-      - "docker/Dockerfile"
-      - "docker/entrypoint.sh"
+      - "docker/**"
       - ".github/workflows/build-docker.yml"
 
 env:

@@ -17,25 +17,24 @@ data:
     # Process configuration
     pidfile /run/opendkim/opendkim.pid
 
-    # Logging configuration - disable syslog for container
+    # Logging configuration - enable verbose logging to stdout
     Syslog                  no
+    LogWhy                  yes
+    LogResults              yes
 
-    # Required to use local socket with MTAs that access the socket as a non-
-    # privileged user (e.g. Postfix)
+    # Required to use inet socket
     UMask                   002
-
-    # Sign for domain with key using selector 'mail'
-    Domain                  {{ .Values.mail.hostname }}
-    KeyFile                 /etc/opendkim/keys/{{ (index .Values.mail.domains 0).name | default .Values.mail.hostname }}.private
-    Selector                {{ (index .Values.mail.domains 0).dkimSelector | default "mail" }}
 
     # Commonly-used options
     Canonicalization        relaxed/simple
     Mode                    sv
     SubDomains              no
 
-    # Socket for Postfix to connect to
-    Socket                  inet:8891@127.0.0.1
+    # TCP Socket for Postfix to connect to
+    Socket                  inet:8891@localhost
+
+    # Additional security options
+    RequireSafeKeys         false
 
   TrustedHosts: |
 {{- include "mail-relay.trustedHosts" . | nindent 4 }}

@@ -72,6 +72,22 @@ spec:
               DNSENDPOINT_NAME="{{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }}"
               echo "🔍 Checking DNSEndpoint: $DNSENDPOINT_NAME"
 
+              {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
+              # Extract DKIM record if available
+              DKIM_RECORD=""
+              if kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- test -f /data/dkim-keys/{{ .name }}.txt 2>/dev/null; then
+                echo "🔑 Extracting DKIM record for {{ .name }}..."
+                DKIM_RECORD=$(kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- sh -c 'cat /data/dkim-keys/{{ .name }}.txt | grep -v "^;" | tr -d "\n\t " | sed "s/.*TXT(//" | sed "s/).*$//" | tr -d "\""' 2>/dev/null || echo "")
+                if [ -n "$DKIM_RECORD" ]; then
+                  echo "✅ Found DKIM record for {{ .name }}"
+                else
+                  echo "⚠️  DKIM record not ready for {{ .name }}"
+                fi
+              else
+                echo "⚠️  DKIM key file not found for {{ .name }}"
+              fi
+              {{- end }}
+
               # Check if DNSEndpoint exists
               if kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} >/dev/null 2>&1; then
                 # DNSEndpoint exists, check if IP needs updating
@@ -79,6 +95,19 @@ spec:
 
                 echo "📊 Current outbound IP: $CURRENT_IP"
                 echo "📊 Stored DNS IP: $STORED_IP"
+
+                {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
+                # Check if DKIM record exists in DNSEndpoint
+                DKIM_EXISTS=$(kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} -o jsonpath='{.spec.endpoints[?(@.dnsName=="{{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}")].dnsName}' 2>/dev/null || echo "")
+
+                if [ -n "$DKIM_RECORD" ] && [ -z "$DKIM_EXISTS" ]; then
+                  echo "🔑 Adding DKIM record to existing DNSEndpoint for {{ .name }}..."
+                  # Add DKIM record to existing DNSEndpoint
+                  kubectl patch dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} --type='json' -p="[
+                    {\"op\": \"add\", \"path\": \"/spec/endpoints/-\", \"value\": {\"dnsName\": \"{{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}\", \"recordTTL\": {{ $.Values.externalDns.ttl }}, \"recordType\": \"TXT\", \"targets\": [\"$DKIM_RECORD\"]}}
+                  ]" 2>/dev/null && echo "✅ Added DKIM record to DNSEndpoint"
+                fi
+                {{- end }}
 
                 if [ "$CURRENT_IP" != "$STORED_IP" ]; then
                   echo "🔄 IP changed! Updating DNS records for {{ .name }}..."
@@ -143,6 +172,16 @@ spec:
                   recordType: TXT
                   targets:
                   - "{{ $.Values.externalDns.dmarcPolicy }}"
+                {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
+                # DKIM Record (if available)
+                $(if [ -n "$DKIM_RECORD" ]; then
+                  echo "- dnsName: {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}"
+                  echo "  recordTTL: {{ $.Values.externalDns.ttl }}"
+                  echo "  recordType: TXT"
+                  echo "  targets:"
+                  echo "  - \"$DKIM_RECORD\""
+                fi)
+                {{- end }}
               EOF
                 if [ $? -eq 0 ]; then
                   echo "✅ Created DNSEndpoint for {{ .name }} with IP: $CURRENT_IP"

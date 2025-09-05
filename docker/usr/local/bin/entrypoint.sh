@@ -208,6 +208,7 @@ if [ "${DKIM_ENABLED:-false}" = "true" ]; then
     chmod -R 700 /etc/opendkim/keys/ 2>/dev/null || true
     mkdir -p /var/run/opendkim
     chown -R opendkim:opendkim /var/run/opendkim 2>/dev/null || true
+    
     echo "$(date): OpenDKIM configuration completed"
 fi
 
