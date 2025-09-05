@@ -26,7 +26,7 @@ data:
 
     # OpenDKIM - DKIM signing service (logs to stdout/stderr)
     [program:opendkim]
-    command=/usr/sbin/opendkim -f -v
+    command=stdbuf -o0 -e0 /usr/sbin/opendkim -f -v -D -l
     autostart=%(ENV_DKIM_ENABLED)s
     autorestart=true
     priority=100

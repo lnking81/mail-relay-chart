@@ -146,7 +146,6 @@ The container uses environment variables for configuration:
 | `DKIM_AUTO_GENERATE`        | Auto-generate keys      | `dkim.autoGenerate`             |
 | `DKIM_KEY_SIZE`             | RSA key size            | `dkim.keySize`                  |
 | `DKIM_DOMAINS`              | Comma-separated domains | `mail.domains`                  |
-| `HEADER_CHECKS_ENABLED`     | Enable header checks    | `mail.headerChecks.enabled`     |
 | `RELAY_CREDENTIALS_ENABLED` | Enable SMTP auth        | `mail.relayCredentials.enabled` |
 | `SENDER_ACCESS_ENABLED`     | Enable sender access    | `mail.senderAccess.enabled`     |
 | `PERSISTENCE_ENABLED`       | Enable persistence      | `persistence.enabled`           |
@@ -197,7 +196,17 @@ externalDns:
   enabled: true
   provider: cloudflare # or route53, google, etc.
   autoManageDnsRecords: true
+
+  # Owner ID must match your external-dns installation
+  # Check your external-dns deployment for the --txt-owner-id parameter
+  ownerId: "k8s-cluster-external-dns" # Default value
+  # For multiple clusters, use unique IDs like:
+  # ownerId: "prod-cluster-external-dns"
+  # ownerId: "staging-cluster-external-dns"
 ```
+
+> **Important**: The `ownerId` must match the `--txt-owner-id` parameter in your external-dns deployment.
+> Check with: `kubectl describe deployment external-dns -n kube-system | grep txt-owner-id`
 
 ### Manual DNS Configuration
 

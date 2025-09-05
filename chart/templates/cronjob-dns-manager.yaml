@@ -16,7 +16,6 @@ spec:
       template:
         metadata:
           annotations:
-            checksum/dns-helper-config: {{ include (print $.Template.BasePath "/configmap-dns-helper.yaml") . | sha256sum }}
             {{- if .Values.dkim.enabled }}
             checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
             {{- end }}
@@ -33,24 +32,20 @@ spec:
             - /bin/bash
             - -c
             - |
-              # Don't exit on errors - log them instead
-              # set -e
-
               echo "🔄 DNS Manager CronJob - $(date)"
               echo "======================================"
 
-              # Get the mail relay pod name using the deployment name pattern
+              # Get the mail relay pod name
               POD_NAME=$(kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} | grep -E "{{ include "mail-relay.fullname" . }}-[a-f0-9]" | head -1 | awk '{print $1}' 2>/dev/null)
 
               if [ -z "$POD_NAME" ]; then
                 echo "❌ Mail relay pod not found - will retry on next schedule"
-                echo "🎉 DNS management completed with warnings - $(date)"
                 exit 0
               fi
 
               echo "📧 Found mail relay pod: $POD_NAME"
 
-              # Check outbound IP from the mail relay pod itself
+              # Check outbound IP from the mail relay pod
               echo "🌐 Checking outbound IP from mail relay pod..."
               CURRENT_IP=""
 
@@ -68,133 +63,83 @@ spec:
 
               if [ -z "$CURRENT_IP" ]; then
                 echo "❌ Failed to detect outbound IP - will retry on next schedule"
-                echo "🎉 DNS management completed with warnings - $(date)"
                 exit 0
               fi
 
-              # Check each DNSEndpoint and create/update if needed
-              {{- range .Values.mail.domains }}
-              DNSENDPOINT_NAME="{{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }}"
+              # DNSEndpoint name
+              DNSENDPOINT_NAME="{{ .Release.Name }}-dns"
               echo "🔍 Checking DNSEndpoint: $DNSENDPOINT_NAME"
 
-              {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
-              # Extract DKIM record if available
-              DKIM_RECORD=""
-              if kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- test -f /data/dkim-keys/{{ .name }}.txt 2>/dev/null; then
-                echo "🔑 Extracting DKIM record for {{ .name }}..."
-                DKIM_RECORD=$(kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- sh -c 'cat /data/dkim-keys/{{ .name }}.txt | grep -v "^;" | tr -d "\n\t " | sed "s/.*TXT(//" | sed "s/).*$//" | tr -d "\""' 2>/dev/null || echo "")
-                if [ -n "$DKIM_RECORD" ]; then
-                  echo "✅ Found DKIM record for {{ .name }}"
+              {{- if and .Values.dkim.enabled .Values.dkim.autoGenerate }}
+              # Extract DKIM records for all domains
+              {{- range $index, $domain := .Values.mail.domains }}
+              DKIM_RECORD_{{ $index }}=""
+              if kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- test -f /data/dkim-keys/{{ $domain.name }}.txt 2>/dev/null; then
+                echo "🔑 Extracting DKIM record for {{ $domain.name }}..."
+                DKIM_RECORD_{{ $index }}=$(kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- sh -c 'cat /data/dkim-keys/{{ $domain.name }}.txt | grep -v "^;" | tr -d "\n\t " | sed "s/.*TXT(//" | sed "s/).*$//" | tr -d "\""' 2>/dev/null || echo "")
+                if [ -n "$DKIM_RECORD_{{ $index }}" ]; then
+                  echo "✅ Found DKIM record for {{ $domain.name }}"
                 else
-                  echo "⚠️  DKIM record not ready for {{ .name }}"
+                  echo "⚠️  DKIM record not ready for {{ $domain.name }}"
                 fi
               else
-                echo "⚠️  DKIM key file not found for {{ .name }}"
+                echo "⚠️  DKIM key file not found for {{ $domain.name }}"
               fi
+              {{- end }}
               {{- end }}
 
               # Check if DNSEndpoint exists
-              if kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} >/dev/null 2>&1; then
+              if kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ .Release.Namespace }} >/dev/null 2>&1; then
                 # DNSEndpoint exists, check if IP needs updating
-                STORED_IP=$(kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} -o jsonpath='{.spec.endpoints[0].targets[0]}' 2>/dev/null || echo "")
+                STORED_IP=$(kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ .Release.Namespace }} -o jsonpath='{.spec.endpoints[0].targets[0]}' 2>/dev/null || echo "")
 
                 echo "📊 Current outbound IP: $CURRENT_IP"
                 echo "📊 Stored DNS IP: $STORED_IP"
 
-                {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
-                # Check if DKIM record exists in DNSEndpoint
-                DKIM_EXISTS=$(kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} -o jsonpath='{.spec.endpoints[?(@.dnsName=="{{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}")].dnsName}' 2>/dev/null || echo "")
-
-                if [ -n "$DKIM_RECORD" ] && [ -z "$DKIM_EXISTS" ]; then
-                  echo "🔑 Adding DKIM record to existing DNSEndpoint for {{ .name }}..."
-                  # Add DKIM record to existing DNSEndpoint
-                  kubectl patch dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} --type='json' -p="[
-                    {\"op\": \"add\", \"path\": \"/spec/endpoints/-\", \"value\": {\"dnsName\": \"{{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}\", \"recordTTL\": {{ $.Values.externalDns.ttl }}, \"recordType\": \"TXT\", \"targets\": [\"$DKIM_RECORD\"]}}
-                  ]" 2>/dev/null && echo "✅ Added DKIM record to DNSEndpoint"
-                fi
-                {{- end }}
-
                 if [ "$CURRENT_IP" != "$STORED_IP" ]; then
-                  echo "🔄 IP changed! Updating DNS records for {{ .name }}..."
-
-                  # Update A record and SPF record
-                  kubectl patch dnsendpoint "$DNSENDPOINT_NAME" -n {{ $.Release.Namespace }} --type='json' -p="[
-                    {\"op\": \"replace\", \"path\": \"/spec/endpoints/0/targets/0\", \"value\": \"$CURRENT_IP\"},
-                    {\"op\": \"replace\", \"path\": \"/spec/endpoints/2/targets/0\", \"value\": \"v=spf1 ip4:$CURRENT_IP a:{{ include "mail-relay.externalDnsHostname" $ }} ~all\"}
-                  ]"
-
-                  if [ $? -eq 0 ]; then
-                    echo "✅ Updated DNS records for {{ .name }} with IP: $CURRENT_IP"
-                  else
-                    echo "❌ Failed to update DNS records for {{ .name }}"
-                  fi
+                  echo "📝 IP changed! Updating DNS records..."
+                  kubectl delete dnsendpoint "$DNSENDPOINT_NAME" -n {{ .Release.Namespace }}
+                  RECREATE_ENDPOINT=true
                 else
-                  echo "✅ IP unchanged for {{ .name }}, no update needed"
+                  echo "✅ IP unchanged, no update needed"
+                  RECREATE_ENDPOINT=false
                 fi
               else
-                # DNSEndpoint doesn't exist, create it
-                echo "🆕 Creating new DNSEndpoint for {{ .name }}..."
+                echo "🆕 DNSEndpoint doesn't exist, creating new one..."
+                RECREATE_ENDPOINT=true
+              fi
 
-                # Get the deployment UID for owner reference
-                DEPLOYMENT_UID=$(kubectl get deployment {{ include "mail-relay.fullname" $ }} -n {{ $.Release.Namespace }} -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+              if [ "$RECREATE_ENDPOINT" = "true" ]; then
+                echo "Creating comprehensive DNSEndpoint for all domains..."
 
-                cat << EOF | kubectl apply -f -
-              apiVersion: externaldns.k8s.io/v1alpha1
-              kind: DNSEndpoint
-              metadata:
-                name: $DNSENDPOINT_NAME
-                namespace: {{ $.Release.Namespace }}
-                labels:
-                  app.kubernetes.io/name: {{ include "mail-relay.name" $ }}
-                  app.kubernetes.io/instance: {{ $.Release.Name }}
-                  app.kubernetes.io/version: {{ $.Chart.AppVersion }}
-                  app.kubernetes.io/managed-by: {{ $.Release.Service }}
-                  helm.sh/chart: {{ include "mail-relay.chart" $ }}
-                  dns-domain: {{ .name }}
-              spec:
-                endpoints:
-                # A Record for mail server
-                - dnsName: {{ $.Values.mail.hostname }}
-                  recordTTL: {{ $.Values.externalDns.ttl }}
-                  recordType: A
-                  targets:
-                  - "$CURRENT_IP"
-                # MX Record
-                - dnsName: {{ .name }}
-                  recordTTL: {{ $.Values.externalDns.ttl }}
-                  recordType: MX
-                  targets:
-                  - "10 {{ $.Values.mail.hostname }}"
-                # SPF Record
-                - dnsName: {{ .name }}
-                  recordTTL: {{ $.Values.externalDns.ttl }}
-                  recordType: TXT
-                  targets:
-                  - "v=spf1 ip4:$CURRENT_IP a:{{ $.Values.mail.hostname }} ~all"
-                # DMARC Record
-                - dnsName: _dmarc.{{ .name }}
-                  recordTTL: {{ $.Values.externalDns.ttl }}
-                  recordType: TXT
-                  targets:
-                  - "{{ $.Values.externalDns.dmarcPolicy }}"
-                {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
-                # DKIM Record (if available)
-                $(if [ -n "$DKIM_RECORD" ]; then
-                  echo "- dnsName: {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}"
-                  echo "  recordTTL: {{ $.Values.externalDns.ttl }}"
-                  echo "  recordType: TXT"
-                  echo "  targets:"
-                  echo "  - \"$DKIM_RECORD\""
-                fi)
+                # Copy template and substitute variables
+                cp /etc/dns-template/dnsendpoint-template.yaml /tmp/dnsendpoint.yaml
+                
+                # Replace IP variable
+                sed -i "s/\${CURRENT_IP}/$CURRENT_IP/g" /tmp/dnsendpoint.yaml
+                
+                # Replace DKIM variables
+                {{- range $index, $domain := .Values.mail.domains }}
+                if [ -n "$DKIM_RECORD_{{ $index }}" ]; then
+                  sed -i "s|\${DKIM_RECORD_{{ $index }}}|$DKIM_RECORD_{{ $index }}|g" /tmp/dnsendpoint.yaml
+                fi
                 {{- end }}
-              EOF
+
+                echo "Generated DNSEndpoint YAML:"
+                cat /tmp/dnsendpoint.yaml
+
+                # Apply the DNSEndpoint
+                kubectl apply -f /tmp/dnsendpoint.yaml
+
+                # Clean up
+                rm -f /tmp/dnsendpoint.yaml
+
                 if [ $? -eq 0 ]; then
-                  echo "✅ Created DNSEndpoint for {{ .name }} with IP: $CURRENT_IP"
+                  echo "✅ Created/updated DNSEndpoint with all domains"
                 else
-                  echo "❌ Failed to create DNSEndpoint for {{ .name }}"
+                  echo "❌ Failed to create/update DNSEndpoint"
                 fi
               fi
-              {{- end }}
 
               echo "🎉 DNS management completed - $(date)"
             resources:
@@ -204,4 +149,12 @@ spec:
               limits:
                 memory: "256Mi"
                 cpu: "500m"
+            volumeMounts:
+            - name: dnsendpoint-template
+              mountPath: /etc/dns-template
+              readOnly: true
+          volumes:
+          - name: dnsendpoint-template
+            configMap:
+              name: {{ include "mail-relay.fullname" . }}-dnsendpoint-template
 {{- end }}

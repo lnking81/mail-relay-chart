@@ -7,9 +7,9 @@ metadata:
     {{- include "mail-relay.labels" . | nindent 4 }}
 data:
   opendkim.conf: |
-    # OpenDKIM Configuration
+    # OpenDKIM Configuration - Based on working Gmail-compatible setup
 
-    # Host configuration
+    # Host and table configuration
     InternalHosts refile:/etc/opendkim/TrustedHosts
     KeyTable refile:/etc/opendkim/KeyTable
     SigningTable refile:/etc/opendkim/SigningTable
@@ -17,33 +17,22 @@ data:
     # Process configuration
     pidfile /run/opendkim/opendkim.pid
 
-    # Logging configuration - enable maximum debug logging
+    # Log to syslog
     Syslog                  no
-    LogWhy                  yes
-    LogResults              yes
-    # Run in foreground for supervisor
-    Background              no
+    LogResults             yes
+    LogWhy                 yes
 
-    # Enable milter debugging
-    MilterDebug             6
-
-    # Additional debug options
-    DiagnosticDirectory     /tmp
-    KeepTemporaryFiles      yes
-
-    # Required to use inet socket
+    # Required to use local socket with MTAs that access the socket as a non-
+    # privileged user (e.g. Postfix)
     UMask                   002
 
     # Commonly-used options
-    Canonicalization        relaxed/relaxed
-    Mode                    s
+    Canonicalization        relaxed/simple
+    Mode                    sv
     SubDomains              no
 
-    # TCP Socket for Postfix to connect to
+    # Socket for Postfix to connect to
     Socket                  inet:8891@localhost
-
-    # Additional security options
-    RequireSafeKeys         false
 
   TrustedHosts: |
 {{- include "mail-relay.trustedHosts" . | nindent 4 }}

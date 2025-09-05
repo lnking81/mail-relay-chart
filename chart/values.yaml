@@ -23,13 +23,15 @@ service:
 # External DNS configuration
 externalDns:
   enabled: true
-  hostname: "" # Will be set to {{ .Values.mail.hostname }} if empty
   ttl: 300
+
+  # Owner ID for external-dns - should match your external-dns installation
+  # Common values: "k8s-cluster-external-dns", "external-dns", or cluster-specific IDs
+  # Set this to match your external-dns configuration's --txt-owner-id parameter
+  ownerId: "k8s-cluster-external-dns"
+
   # Additional annotations for external-dns
-  annotations:
-    {}
-    # external-dns.alpha.kubernetes.io/txt-owner-id: "mail-relay"
-    # external-dns.alpha.kubernetes.io/txt-prefix: "mail-relay-"
+  annotations: {}
 
   # Automated DNS record management
   autoManageDnsRecords: false # Set to true to auto-create SPF/DKIM/DMARC records with detected IP
@@ -69,24 +71,16 @@ mail:
 
   # Trusted networks/hosts that can send mail through this relay
   trustedNetworks:
-    - "127.0.0.0/8"
-    - "10.0.0.0/8"
-    - "172.16.0.0/12"
-    - "192.168.0.0/16"
+    - "127.0.0.0/8" # Localhost
+    - "10.0.0.0/8" # Private network
+    - "172.16.0.0/12" # Docker default
+    - "192.168.0.0/16" # Private network
 
   # Additional trusted IPs (from your history)
   trustedIPs: []
 
   # Message size limit (in bytes)
   messageSizeLimit: "50MB"
-
-  # Header checks configuration
-  headerChecks:
-    enabled: true
-    # Rules will be generated in templates to ignore Received headers
-    # not from configured domains or hostname
-    ignoreForeignReceivedHeaders: true
-    rules: []
 
 # DKIM configuration
 dkim:

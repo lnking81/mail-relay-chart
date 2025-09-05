@@ -14,13 +14,11 @@ spec:
   template:
     metadata:
       annotations:
+        checksum/entrypoint: {{ include (print $.Template.BasePath "/configmap-entrypoint.yaml") . | sha256sum }}
         checksum/postfix-config: {{ include (print $.Template.BasePath "/configmap-postfix.yaml") . | sha256sum }}
         checksum/supervisor-config: {{ include (print $.Template.BasePath "/configmap-supervisor.yaml") . | sha256sum }}
         {{- if .Values.dkim.enabled }}
         checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
-        {{- end }}
-        {{- if .Values.dnsHelper.enabled }}
-        checksum/dns-helper-config: {{ include (print $.Template.BasePath "/configmap-dns-helper.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -81,8 +79,6 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            - name: HEADER_CHECKS_ENABLED
-              value: "{{ .Values.mail.headerChecks.enabled }}"
             {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
             - name: RELAY_CREDENTIALS_ENABLED
               value: "true"
@@ -190,6 +186,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            - name: entrypoint
+              mountPath: /usr/local/bin/entrypoint.sh
+              subPath: entrypoint.sh
             - name: postfix-config
               mountPath: /tmp/postfix-config
             - name: supervisor-config
@@ -211,6 +210,10 @@ spec:
         - name: shared-data
           emptyDir: {}
         {{- end }}
+        - name: entrypoint
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-entrypoint
+            defaultMode: 0755
         - name: postfix-config
           configMap:
             name: {{ include "mail-relay.fullname" . }}-postfix-config

@@ -6,9 +6,9 @@ metadata:
     {{- include "mail-relay.labels" . | nindent 4 }}
 data:
   main.cf: |
-    # Basic configuration
+    # Basic configuration - proper hostname vs domain separation
     myhostname = {{ .Values.mail.hostname }}
-    mydomain = {{ .Values.mail.hostname }}
+    mydomain = {{ (index .Values.mail.domains 0).name }}
     myorigin = $mydomain
 
     # Network and interface configuration
@@ -17,6 +17,11 @@ data:
 
     # Logging configuration - direct to stdout for containers
     maillog_file = /dev/stdout
+
+    # Accept mail from configured domains even if they don't have A records
+    {{- range .Values.mail.domains }}
+    # Allow {{ .name }} as valid sender domain
+    {{- end }}
 
     # Relay configuration - disable local delivery, relay only
     {{- if .Values.mail.relayHost }}
@@ -30,8 +35,8 @@ data:
     local_recipient_maps =
     local_transport = error:local delivery is disabled
 
-    # Trusted networks configuration
-    mynetworks = {{ range .Values.mail.trustedNetworks }}{{ . }}, {{ end }}{{ range .Values.mail.trustedIPs }}{{ . }}, {{ end }}127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
+    # Trusted networks configuration - simple like working server
+    mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128 {{ range .Values.mail.trustedIPs }} {{ . }}{{ end }} {{ range .Values.mail.trustedNetworks }} {{ . }}{{ end }}
 
     {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayHost }}
     # SASL authentication for relay
@@ -42,7 +47,7 @@ data:
     smtp_use_tls = yes
     {{- end }}
 
-    # DKIM configuration
+    # DKIM configuration - with header cleanup before signing
     {{- if .Values.dkim.enabled }}
     milter_default_action = accept
     milter_protocol = 2
@@ -62,20 +67,11 @@ data:
     maillog_file_prefixes = /dev
     {{- end }}
 
-    # Relay restrictions
+    # Relay restrictions - matching working server
     smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
 
-    # Header checks
-    {{- if .Values.mail.headerChecks.enabled }}
-    header_checks = regexp:/etc/postfix/header_checks
-    {{- end }}
-
-    # Sender restrictions with optional sender access control
-    {{- if and .Values.mail.senderAccess .Values.mail.senderAccess.enabled }}
-    smtpd_sender_restrictions = check_sender_access hash:/etc/postfix/sender_access, reject_non_fqdn_sender, reject_unknown_sender_domain, permit
-    {{- else }}
-    smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, reject_unknown_sender_domain, permit
-    {{- end }}
+    # Sender restrictions - allow mail-only domains without A records
+    smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, permit
 
     # Message size limit
     message_size_limit = {{ .Values.mail.messageSizeLimit | default "50MB" | replace "MB" "000000" | replace "KB" "000" | replace "GB" "000000000" }}
@@ -98,6 +94,8 @@ data:
     smtp_dns_support_level = enabled
     smtp_host_lookup = dns
 
+    # Header cleanup configuration - remove internal Received headers
+    smtp_header_checks = regexp:/etc/postfix/header_checks
   master.cf: |
     #
     # Postfix master process configuration file.  For details on the format
@@ -142,32 +140,13 @@ data:
     uucp      unix  -       n       n       -       -       pipe
       flags=Fqhu user=uucp argv=uux -r -n -z -a$sender - $nexthop!rmail ($recipient)
 
-  {{- if .Values.mail.headerChecks.enabled }}
   header_checks: |
-    {{- if .Values.mail.headerChecks.ignoreForeignReceivedHeaders }}
-    # Simple header cleaning rules
-    /^Received:\s+from\s+localhost/ OK
-    /^Received:\s+from\s+{{ .Values.mail.hostname | replace "." "\\." }}/ OK
-    {{- range .Values.mail.domains }}
-    /^Received:\s+from\s+.*{{ .name | replace "." "\\." }}/ OK
-    {{- end }}
-    {{- end }}
-    {{- range .Values.mail.headerChecks.rules }}
-    {{ tpl .pattern $ }} {{ .action }}
-    {{- end }}
-  {{- end }}
+    # Remove all Received headers to prevent internal network exposure
+    /^Received: .*$/ IGNORE
+    # Fix Message-Id to use the correct domain
+    /Message-Id:\s+<(.*?)@.*?>/ REPLACE Message-Id: <$1@{{ (index .Values.mail.domains 0).name }}>
 
   {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
   sasl_passwd: |
     {{ .Values.mail.relayHost }}:{{ .Values.mail.relayPort }} {{ .Values.mail.relayCredentials.username }}:{{ .Values.mail.relayCredentials.password }}
-  {{- end }}
-
-  {{- if and .Values.mail.senderAccess .Values.mail.senderAccess.enabled }}
-  sender_access: |
-    {{- range .Values.mail.senderAccess.allowedSenders }}
-    {{ . }} OK
-    {{- end }}
-    {{- range .Values.mail.senderAccess.rejectedSenders }}
-    {{ . }} REJECT
-    {{- end }}
   {{- end }}

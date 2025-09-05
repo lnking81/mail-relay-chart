@@ -14,7 +14,6 @@ spec:
     metadata:
       annotations:
         checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
-        checksum/dns-helper-config: {{ include (print $.Template.BasePath "/configmap-dns-helper.yaml") . | sha256sum }}
       labels:
         {{- include "mail-relay.selectorLabels" . | nindent 8 }}
         job: dkim-extractor

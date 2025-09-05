@@ -1,4 +1,5 @@
 {{- if .Values.dnsHelper.enabled }}
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -137,21 +138,25 @@ data:
     echo "📧 Domain: {{ .name }}"
     echo "----------------------------------------"
 
-    # Try to get from ConfigMap first
-    if kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" >/dev/null 2>&1; then
-      echo "✅ Auto-generated DNS records available:"
+    # Try to get from DNSEndpoint first
+    if kubectl get dnsendpoint {{ $.Release.Name }}-dns -n "$NAMESPACE" >/dev/null 2>&1; then
+      echo "✅ Auto-generated DNS records available in DNSEndpoint:"
       echo
+      CURRENT_IP=$(kubectl get dnsendpoint {{ $.Release.Name }}-dns -n "$NAMESPACE" -o jsonpath='{.spec.endpoints[0].targets[0]}' 2>/dev/null)
       echo "A Record:"
-      echo "  {{ $.Values.mail.hostname }}. A $(kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.external-ip}')"
+      echo "  {{ $.Values.mail.hostname }}. A $CURRENT_IP"
       echo
       echo "MX Record:"
-      kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.mx-record}'
+      echo "  {{ .name }}. MX 10 {{ $.Values.mail.hostname }}."
       echo
       echo "SPF Record:"
-      echo "  {{ .name }}. TXT \"$(kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.spf-record}')\""
+      echo "  {{ .name }}. TXT \"v=spf1 ip4:$CURRENT_IP a:{{ $.Values.mail.hostname }} ~all\""
       echo
       echo "DMARC Record:"
-      echo "  _dmarc.{{ .name }}. TXT \"$(kubectl get configmap {{ include "mail-relay.fullname" $ }}-dns-{{ .name | replace "." "-" }} -n "$NAMESPACE" -o jsonpath='{.data.dmarc-record}')\""
+      echo "  _dmarc.{{ .name }}. TXT \"v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}\""
+      echo
+      echo "DKIM Record:"
+      echo "  {{ .dkimSelector | default "mail" }}._domainkey.{{ .name }}. TXT \"<DKIM-PUBLIC-KEY>\""
     else
       echo "📝 Manual DNS records (ConfigMap not found):"
       echo
@@ -299,4 +304,5 @@ data:
     echo
     echo "========================================"
     {{- end }}
+
 {{- end }}

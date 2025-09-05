@@ -63,11 +63,7 @@ Create the name of the service account to use
 Get the external DNS hostname
 */}}
 {{- define "mail-relay.externalDnsHostname" -}}
-{{- if .Values.externalDns.hostname }}
-{{- .Values.externalDns.hostname }}
-{{- else }}
 {{- .Values.mail.hostname }}
-{{- end }}
 {{- end }}
 
 {{/*
