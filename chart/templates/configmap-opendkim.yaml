@@ -17,17 +17,26 @@ data:
     # Process configuration
     pidfile /run/opendkim/opendkim.pid
 
-    # Logging configuration - enable verbose logging to stdout
+    # Logging configuration - enable maximum debug logging
     Syslog                  no
     LogWhy                  yes
     LogResults              yes
+    # Run in foreground for supervisor
+    Background              no
+
+    # Enable milter debugging
+    MilterDebug             6
+
+    # Additional debug options
+    DiagnosticDirectory     /tmp
+    KeepTemporaryFiles      yes
 
     # Required to use inet socket
     UMask                   002
 
     # Commonly-used options
-    Canonicalization        relaxed/simple
-    Mode                    sv
+    Canonicalization        relaxed/relaxed
+    Mode                    s
     SubDomains              no
 
     # TCP Socket for Postfix to connect to

@@ -15,6 +15,7 @@ spec:
     metadata:
       annotations:
         checksum/postfix-config: {{ include (print $.Template.BasePath "/configmap-postfix.yaml") . | sha256sum }}
+        checksum/supervisor-config: {{ include (print $.Template.BasePath "/configmap-supervisor.yaml") . | sha256sum }}
         {{- if .Values.dkim.enabled }}
         checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
         {{- end }}
@@ -191,6 +192,8 @@ spec:
           volumeMounts:
             - name: postfix-config
               mountPath: /tmp/postfix-config
+            - name: supervisor-config
+              mountPath: /tmp/supervisor-config
             {{- if .Values.dkim.enabled }}
             - name: opendkim-config
               mountPath: /tmp/opendkim-config
@@ -211,6 +214,9 @@ spec:
         - name: postfix-config
           configMap:
             name: {{ include "mail-relay.fullname" . }}-postfix-config
+        - name: supervisor-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-supervisor-config
         {{- if .Values.dkim.enabled }}
         - name: opendkim-config
           configMap:

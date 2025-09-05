@@ -200,15 +200,34 @@ if [ "${DKIM_ENABLED:-false}" = "true" ]; then
         done
     fi
 
-    # Set permissions for OpenDKIM
+    # Set permissions for OpenDKIM with strict security
+    echo "$(date): Setting strict OpenDKIM permissions..."
     chown -R opendkim:opendkim /data/dkim-keys/ 2>/dev/null || true
-    chmod -R 600 /data/dkim-keys/*.private 2>/dev/null || true
-    chmod -R 644 /data/dkim-keys/*.txt 2>/dev/null || true
+    chmod 700 /data/dkim-keys/ 2>/dev/null || true
+    chmod 600 /data/dkim-keys/*.private 2>/dev/null || true
+    chmod 644 /data/dkim-keys/*.txt 2>/dev/null || true
     chown -R opendkim:opendkim /etc/opendkim/keys/ 2>/dev/null || true
-    chmod -R 700 /etc/opendkim/keys/ 2>/dev/null || true
+    chmod 700 /etc/opendkim/keys/ 2>/dev/null || true
     mkdir -p /var/run/opendkim
     chown -R opendkim:opendkim /var/run/opendkim 2>/dev/null || true
-    
+    chmod 755 /var/run/opendkim 2>/dev/null || true
+
+    # Verify OpenDKIM key permissions
+    echo "$(date): Verifying OpenDKIM key permissions..."
+    for domain in $DKIM_DOMAINS; do
+        private_key="/data/dkim-keys/${domain}.private"
+        if [ -f "$private_key" ]; then
+            key_perms=$(stat -c '%a' "$private_key" 2>/dev/null || echo "000")
+            key_owner=$(stat -c '%U:%G' "$private_key" 2>/dev/null || echo "unknown")
+            echo "$(date): Key $private_key - Owner: $key_owner, Permissions: $key_perms"
+            if [ "$key_perms" != "600" ] || [ "$key_owner" != "opendkim:opendkim" ]; then
+                echo "$(date): WARNING: Fixing key permissions for $private_key"
+                chown opendkim:opendkim "$private_key"
+                chmod 600 "$private_key"
+            fi
+        fi
+    done
+
     echo "$(date): OpenDKIM configuration completed"
 fi
 
@@ -281,6 +300,10 @@ fi
 
 # Create supervisor directories
 mkdir -p /var/log/supervisor
+
+# Copy supervisor configuration from configmap
+echo "$(date): Copying supervisor configuration from configmap..."
+cp /tmp/supervisor-config/supervisord.conf /etc/supervisor/supervisord.conf
 
 echo "$(date): Starting supervisord to manage mail relay services..."
 echo "=== Services will be managed by supervisord ==="
