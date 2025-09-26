@@ -208,6 +208,73 @@ externalDns:
 > **Important**: The `ownerId` must match the `--txt-owner-id` parameter in your external-dns deployment.
 > Check with: `kubectl describe deployment external-dns -n kube-system | grep txt-owner-id`
 
+### IP Detection Configuration
+
+When using automatic DNS management, you can control how external IPs are determined:
+
+#### Option 1: Automatic IP Detection (Default)
+
+```yaml
+externalDns:
+  enabled: true
+  autoManageDnsRecords: true
+
+dnsHelper:
+  enabled: true
+  ipDetection: true # Default - auto-detect external IP
+  # No externalIps specified - will detect automatically
+```
+
+#### Option 2: Manual IP Configuration
+
+```yaml
+externalDns:
+  enabled: true
+  autoManageDnsRecords: true
+
+dnsHelper:
+  enabled: true
+  ipDetection: false # Disable auto-detection
+  externalIps: # Use these IPs instead
+    - "203.0.113.1"
+    - "203.0.113.2"
+```
+
+#### Option 3: Hybrid (Manual IPs take precedence)
+
+```yaml
+externalDns:
+  enabled: true
+  autoManageDnsRecords: true
+
+dnsHelper:
+  enabled: true
+  ipDetection: true # Enabled but will be ignored
+  externalIps: # These take precedence
+    - "203.0.113.1"
+```
+
+#### Behavior Summary:
+
+| ipDetection | externalIps | Behavior                                            |
+| ----------- | ----------- | --------------------------------------------------- |
+| true        | []          | Auto-detect IP from external services (every 5 min) |
+| false       | [ips...]    | Use specified IPs (check every 6 hours)             |
+| true        | [ips...]    | Use specified IPs (check every 6 hours)             |
+| false       | []          | ❌ Error - must provide IPs when detection disabled |
+
+#### DNS Record Results:
+
+**Auto-detection mode:**
+
+- A: mail.example.com → <detected-ip>
+- SPF: "v=spf1 ip4:<detected-ip> a:mail.example.com ~all"
+
+**Manual IP mode:**
+
+- A: mail.example.com → 203.0.113.1, 203.0.113.2
+- SPF: "v=spf1 ip4:203.0.113.1 ip4:203.0.113.2 a:mail.example.com ~all"
+
 ### Manual DNS Configuration
 
 If not using external-dns, create these DNS records:

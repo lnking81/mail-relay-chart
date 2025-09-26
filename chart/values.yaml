@@ -38,18 +38,23 @@ externalDns:
   autoCreateDmarc: true # Create DMARC records when autoManageDnsRecords is enabled
   dmarcPolicy: "v=DMARC1; p=none; rua=mailto:postmaster@" # DMARC policy (domain will be appended)
 
-  # When autoManageDnsRecords is enabled:
-  # - External IP is automatically detected
-  # - SPF records include both detected IP and hostname: "v=spf1 ip4:<detected-ip> a:<hostname> ~all"
-  # - DNS ConfigMaps are created with ready-to-use DNS records
-  # - A DNS management job runs to set up all records automatically
+  # Check interval for IP changes (minutes) - only used when ipDetection is true
+  ipCheckInterval: 5
 
 # DNS Helper configuration
 dnsHelper:
   # Create helper scripts and documentation
   enabled: true
-  # Create post-install job to extract DKIM records
-  extractDkimJob: true
+
+  # IP Detection configuration (deprecated: use top-level ipDetection/externalIps)
+  ipDetection: true # Set to false to disable automatic IP detection
+  # Manual external IPs (deprecated: prefer top-level externalIps)
+  # When specified, these IPs will be used instead of auto-detected IP
+  externalIps: []
+  # Example:
+  # externalIps:
+  #   - "203.0.113.1"
+  #   - "203.0.113.2"
 
 # Mail configuration
 mail:
@@ -57,6 +62,15 @@ mail:
   domains:
     - name: "example.com"
       dkimSelector: "mail"
+      # Optional: Provide existing DKIM keys for this domain
+      # dkim:
+      #   privateKey: |
+      #     -----BEGIN RSA PRIVATE KEY-----
+      #     ...base64 encoded private key...
+      #     -----END RSA PRIVATE KEY-----
+      #   publicKey: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQE..."
+      #   dnsRecord: "v=DKIM1;h=sha256;k=rsa;p=MIIBIjANBgkqhkiG..."
+      #   selector: "mail"  # Override default selector for this domain
 
   # Relay configuration
   relayHost: "" # External SMTP relay host (optional)
@@ -91,6 +105,8 @@ dkim:
   autoGenerate: true
   # Existing secret containing DKIM keys (optional)
   existingSecret: ""
+  # Preserve DKIM secrets when helm release is deleted (set to false for complete cleanup)
+  preserveSecretsOnDelete: false
 
 # Persistence
 persistence:

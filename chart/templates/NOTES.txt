@@ -22,15 +22,12 @@
 {{- if .Values.dkim.enabled }}
 3. DKIM Configuration:
 {{- if .Values.dkim.autoGenerate }}
-   DKIM keys have been automatically generated.
+   DKIM keys have been automatically generated and stored in secrets.
 
-   🔍 Quick DKIM record retrieval:
-   kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "mail-relay.fullname" . }}-mail-relay -- cat /data/dkim-keys/*.txt
-
-   {{- if .Values.dnsHelper.extractDkimJob }}
-   📋 Check the DKIM extractor job logs for formatted DNS records:
-   kubectl logs -n {{ .Release.Namespace }} job/{{ include "mail-relay.fullname" . }}-dkim-extractor
-   {{- end }}
+   🔍 Get DKIM DNS records from secrets:
+{{- range .Values.mail.domains }}
+   kubectl get secret {{ include "mail-relay.fullname" $ }}-dkim-{{ .name | replace "." "-" }} -n {{ $.Release.Namespace }} -o jsonpath='{.data.dns\.record}' | base64 -d
+{{- end }}
 
    {{- if .Values.dnsHelper.enabled }}
    🛠️  Use the helper script:
@@ -40,7 +37,7 @@
    kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.dns-records\.md}'
    {{- end }}
 {{- else }}
-   Please ensure DKIM keys are properly configured in the persistent volume.
+   Please ensure DKIM keys are properly configured in the secrets or provide them via values.yaml.
 {{- end }}
 
    Required DNS Records:
@@ -75,9 +72,13 @@
 
 🌐 DNS Records Management:
 
+{{- /* Effective IP detection flag and external IPs */ -}}
+{{- $ipDetection := eq (include "mail-relay.dnsHelper.ipDetection" .) "true" -}}
+{{- $externalIps := .Values.dnsHelper.externalIps | default (list) -}}
 {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
    ✅ Automatic DNS management is ENABLED
 
+   {{- if $ipDetection }}
    🔍 External IP Detection:
    The system automatically detects your external IP and creates DNS records.
 
@@ -105,6 +106,34 @@
    - SPF: {{ .name }}. TXT "v=spf1 ip4:<DETECTED-IP> a:{{ $.Values.mail.hostname }} ~all"
    - DMARC: _dmarc.{{ .name }}. TXT "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
 {{- end }}
+   {{- else }}
+   🧩 Static External IPs:
+   The chart uses configured external IPs and creates DNS records without the CronJob.
+
+   Configured IPs:
+   {{- range $externalIps }}
+   - {{ . }}
+   {{- end }}
+
+   📋 Get DNS records with configured IPs:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.get-dns-records-with-ip\.sh}' | bash
+
+   {{- if .Values.dnsHelper.enabled }}
+   🛠️  Complete DNS setup guidance:
+   kubectl get configmap {{ include "mail-relay.fullname" . }}-dns-helper -o jsonpath='{.data.dns-records\.md}' > dns-records.md
+   {{- end }}
+
+   Essential DNS records (using configured IPs):
+{{- range .Values.mail.domains }}
+   For {{ .name }}:
+   {{- range $externalIps }}
+   - A: {{ $.Values.mail.hostname }}. A {{ . }}
+   {{- end }}
+   - MX: {{ .name }}. MX 10 {{ $.Values.mail.hostname }}.
+   - SPF: {{ .name }}. TXT "v=spf1 {{- range $i, $ip := $externalIps }} {{ if $i }}{{ end }}ip4:{{ $ip }}{{- end }} a:{{ $.Values.mail.hostname }} ~all"
+   - DMARC: _dmarc.{{ .name }}. TXT "v=DMARC1; p=none; rua=mailto:postmaster@{{ .name }}"
+{{- end }}
+   {{- end }}
 
 {{- else }}
    ⚠️  Automatic DNS management is DISABLED

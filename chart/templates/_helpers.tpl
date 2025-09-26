@@ -101,3 +101,26 @@ Generate DKIM signing table entries
 *@{{ .name }} {{ .dkimSelector }}._domainkey.{{ .name }}
 {{- end }}
 {{- end }}
+
+{{/*
+DNS Helper: Get IP detection setting with proper boolean handling
+Usage: {{- $ipDetection := include "mail-relay.dnsHelper.ipDetection" . | eq "true" -}}
+*/}}
+{{- define "mail-relay.dnsHelper.ipDetection" -}}
+{{- if hasKey .Values.dnsHelper "ipDetection" -}}
+{{- if .Values.dnsHelper.ipDetection -}}true{{- else -}}false{{- end -}}
+{{- else -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+DNS Helper: Get external IPs count (for templates that need to check if any are configured)
+*/}}
+{{- define "mail-relay.dnsHelper.hasExternalIps" -}}
+{{- if .Values.dnsHelper.externalIps -}}
+{{- if gt (len .Values.dnsHelper.externalIps) 0 -}}true{{- else -}}false{{- end -}}
+{{- else -}}
+false
+{{- end -}}
+{{- end }}

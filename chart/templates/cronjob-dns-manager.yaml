@@ -1,4 +1,6 @@
-{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+{{- /* CronJob only when ipDetection is enabled; now uses shared script */ -}}
+{{- $ipDetection := eq (include "mail-relay.dnsHelper.ipDetection" .) "true" -}}
+{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords $ipDetection }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -28,120 +30,7 @@ spec:
           containers:
           - name: dns-manager
             image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-            command:
-            - /bin/bash
-            - -c
-            - |
-              echo "🔄 DNS Manager CronJob - $(date)"
-              echo "======================================"
-
-              # Get the mail relay pod name
-              POD_NAME=$(kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} | grep -E "{{ include "mail-relay.fullname" . }}-[a-f0-9]" | head -1 | awk '{print $1}' 2>/dev/null)
-
-              if [ -z "$POD_NAME" ]; then
-                echo "❌ Mail relay pod not found - will retry on next schedule"
-                exit 0
-              fi
-
-              echo "📧 Found mail relay pod: $POD_NAME"
-
-              # Check outbound IP from the mail relay pod
-              echo "🌐 Checking outbound IP from mail relay pod..."
-              CURRENT_IP=""
-
-              for service in "https://ifconfig.me/ip" "https://icanhazip.com" "https://ipv4.icanhazip.com"; do
-                echo "Trying $service..."
-                if IP=$(kubectl exec -n {{ .Release.Namespace }} "$POD_NAME" -- curl -s --connect-timeout 10 --max-time 30 "$service" 2>/dev/null); then
-                  if echo "$IP" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' >/dev/null; then
-                    CURRENT_IP="$IP"
-                    echo "✅ Detected outbound IP: $CURRENT_IP"
-                    break
-                  fi
-                fi
-                echo "Failed to get valid IP from $service"
-              done
-
-              if [ -z "$CURRENT_IP" ]; then
-                echo "❌ Failed to detect outbound IP - will retry on next schedule"
-                exit 0
-              fi
-
-              # DNSEndpoint name
-              DNSENDPOINT_NAME="{{ .Release.Name }}-dns"
-              echo "🔍 Checking DNSEndpoint: $DNSENDPOINT_NAME"
-
-              {{- if and .Values.dkim.enabled .Values.dkim.autoGenerate }}
-              # Extract DKIM records for all domains
-              {{- range $index, $domain := .Values.mail.domains }}
-              DKIM_RECORD_{{ $index }}=""
-              if kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- test -f /data/dkim-keys/{{ $domain.name }}.txt 2>/dev/null; then
-                echo "🔑 Extracting DKIM record for {{ $domain.name }}..."
-                DKIM_RECORD_{{ $index }}=$(kubectl exec -n {{ $.Release.Namespace }} "$POD_NAME" -- sh -c 'cat /data/dkim-keys/{{ $domain.name }}.txt | grep -v "^;" | tr -d "\n\t " | sed "s/.*TXT(//" | sed "s/).*$//" | tr -d "\""' 2>/dev/null || echo "")
-                if [ -n "$DKIM_RECORD_{{ $index }}" ]; then
-                  echo "✅ Found DKIM record for {{ $domain.name }}"
-                else
-                  echo "⚠️  DKIM record not ready for {{ $domain.name }}"
-                fi
-              else
-                echo "⚠️  DKIM key file not found for {{ $domain.name }}"
-              fi
-              {{- end }}
-              {{- end }}
-
-              # Check if DNSEndpoint exists
-              if kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ .Release.Namespace }} >/dev/null 2>&1; then
-                # DNSEndpoint exists, check if IP needs updating
-                STORED_IP=$(kubectl get dnsendpoint "$DNSENDPOINT_NAME" -n {{ .Release.Namespace }} -o jsonpath='{.spec.endpoints[0].targets[0]}' 2>/dev/null || echo "")
-
-                echo "📊 Current outbound IP: $CURRENT_IP"
-                echo "📊 Stored DNS IP: $STORED_IP"
-
-                if [ "$CURRENT_IP" != "$STORED_IP" ]; then
-                  echo "📝 IP changed! Updating DNS records..."
-                  kubectl delete dnsendpoint "$DNSENDPOINT_NAME" -n {{ .Release.Namespace }}
-                  RECREATE_ENDPOINT=true
-                else
-                  echo "✅ IP unchanged, no update needed"
-                  RECREATE_ENDPOINT=false
-                fi
-              else
-                echo "🆕 DNSEndpoint doesn't exist, creating new one..."
-                RECREATE_ENDPOINT=true
-              fi
-
-              if [ "$RECREATE_ENDPOINT" = "true" ]; then
-                echo "Creating comprehensive DNSEndpoint for all domains..."
-
-                # Copy template and substitute variables
-                cp /etc/dns-template/dnsendpoint-template.yaml /tmp/dnsendpoint.yaml
-                
-                # Replace IP variable
-                sed -i "s/\${CURRENT_IP}/$CURRENT_IP/g" /tmp/dnsendpoint.yaml
-                
-                # Replace DKIM variables
-                {{- range $index, $domain := .Values.mail.domains }}
-                if [ -n "$DKIM_RECORD_{{ $index }}" ]; then
-                  sed -i "s|\${DKIM_RECORD_{{ $index }}}|$DKIM_RECORD_{{ $index }}|g" /tmp/dnsendpoint.yaml
-                fi
-                {{- end }}
-
-                echo "Generated DNSEndpoint YAML:"
-                cat /tmp/dnsendpoint.yaml
-
-                # Apply the DNSEndpoint
-                kubectl apply -f /tmp/dnsendpoint.yaml
-
-                # Clean up
-                rm -f /tmp/dnsendpoint.yaml
-
-                if [ $? -eq 0 ]; then
-                  echo "✅ Created/updated DNSEndpoint with all domains"
-                else
-                  echo "❌ Failed to create/update DNSEndpoint"
-                fi
-              fi
-
-              echo "🎉 DNS management completed - $(date)"
+            command: ["/bin/bash","-c","/scripts/manage-dns.sh cron"]
             resources:
               requests:
                 memory: "128Mi"
@@ -153,8 +42,15 @@ spec:
             - name: dnsendpoint-template
               mountPath: /etc/dns-template
               readOnly: true
+            - name: dns-helper
+              mountPath: /scripts
+              readOnly: true
           volumes:
           - name: dnsendpoint-template
             configMap:
               name: {{ include "mail-relay.fullname" . }}-dnsendpoint-template
+          - name: dns-helper
+            configMap:
+              name: {{ include "mail-relay.fullname" . }}-dns-helper
+              defaultMode: 0755
 {{- end }}

@@ -196,6 +196,11 @@ spec:
             {{- if .Values.dkim.enabled }}
             - name: opendkim-config
               mountPath: /tmp/opendkim-config
+            {{- range $index, $domain := .Values.mail.domains }}
+            - name: dkim-{{ $domain.name | replace "." "-" }}
+              mountPath: /data/dkim-secrets/{{ $domain.name }}
+              readOnly: true
+            {{- end }}
             {{- end }}
             {{- if .Values.persistence.enabled }}
             - name: data
@@ -224,6 +229,12 @@ spec:
         - name: opendkim-config
           configMap:
             name: {{ include "mail-relay.fullname" . }}-opendkim-config
+        {{- range $index, $domain := .Values.mail.domains }}
+        - name: dkim-{{ $domain.name | replace "." "-" }}
+          secret:
+            secretName: {{ include "mail-relay.fullname" $ }}-dkim-{{ $domain.name | replace "." "-" }}
+            defaultMode: 0400
+        {{- end }}
         {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data
