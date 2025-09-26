@@ -1,0 +1,6 @@
+owner: lnking81
+git-repo: mail-relay-chart
+charts-dir: .
+target-branch: gh-pages
+skip-packaging: false
+skip-existing: true
