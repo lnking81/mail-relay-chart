@@ -64,5 +64,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=buildkit-multiarch
+            type=gha,scope=buildkit-amd64
+            type=gha,scope=buildkit-arm64
+          cache-to: type=gha,scope=buildkit-multiarch,mode=max

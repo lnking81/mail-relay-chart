@@ -1,7 +1,7 @@
 # Custom mail relay image with pre-installed packages
 FROM debian:13-slim
 
-# Install all required packages in one layer
+# Install all required packages in one layer (this layer will be cached)
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     postfix \
@@ -42,15 +42,24 @@ RUN apt-get update && \
     # Mail testing tools
     swaks \
     mailutils \
-    # Add kubectl for DNS management
-    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
-    && chmod +x kubectl \
-    && mv kubectl /usr/local/bin/ \
     # Clean up to reduce image size
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /tmp/* \
     && rm -rf /var/tmp/*
+
+# Add kubectl for DNS management (multi-arch compatible) - separate layer
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+    amd64) KUBECTL_ARCH=amd64 ;; \
+    arm64) KUBECTL_ARCH=arm64 ;; \
+    armhf) KUBECTL_ARCH=arm ;; \
+    *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt) && \
+    curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" && \
+    chmod +x kubectl && \
+    mv kubectl /usr/local/bin/
 
 # Create necessary directories
 RUN mkdir -p /var/spool/postfix \
