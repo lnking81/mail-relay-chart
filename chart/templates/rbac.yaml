@@ -52,6 +52,10 @@ metadata:
   name: {{ include "mail-relay.fullname" . }}-dkim-manager
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-2"
+    "helm.sh/hook-delete-policy": before-hook-creation
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
@@ -63,6 +67,10 @@ metadata:
   name: {{ include "mail-relay.fullname" . }}-dkim-manager
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-2"
+    "helm.sh/hook-delete-policy": before-hook-creation
 subjects:
 - kind: ServiceAccount
   name: {{ include "mail-relay.serviceAccountName" . }}
