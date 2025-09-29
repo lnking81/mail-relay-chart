@@ -36,10 +36,6 @@ spec:
         - name: dns-helper
           mountPath: /scripts
           readOnly: true
-        {{- if .Values.persistence.enabled }}
-        - name: data
-          mountPath: /data
-        {{- end }}
       volumes:
       - name: dnsendpoint-template
         configMap:
@@ -48,17 +44,4 @@ spec:
         configMap:
           name: {{ include "mail-relay.fullname" . }}-dns-helper
           defaultMode: 0755
-      {{- if .Values.persistence.enabled }}
-      - name: data
-        {{- if .Values.persistence.existingClaim }}
-        persistentVolumeClaim:
-          claimName: {{ .Values.persistence.existingClaim }}
-        {{- else }}
-        persistentVolumeClaim:
-          claimName: {{ include "mail-relay.fullname" . }}-data
-        {{- end }}
-      {{- else }}
-      - name: data
-        emptyDir: {}
-      {{- end }}
 {{- end }}
