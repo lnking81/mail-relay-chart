@@ -1,71 +1,8 @@
-------
-apiVersion: rbac.authorization.k8s.io/v1apiVersion: rbac.authorization.k8s.io/v1
-kind: Rolekind: Role
-metadata:metadata:
-  name: {{ include "mail-relay.fullname" . }}-manager  name: {{ include "mail-relay.fullname" . }}-manager
-  labels:  labels:
-    {{- include "mail-relay.labels" . | nindent 4 }}    {{- include "mail-relay.labels" . | nindent 4 }}
-  annotations:  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-2"    "helm.sh/hook-weight": "-2"
-    "helm.sh/hook-delete-policy": before-hook-creation    "helm.sh/hook-delete-policy": before-hook-creation
-rules:rules:
-{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
-- apiGroups: [""]- apiGroups: [""]
-  resources: ["services"]  resources: ["services"]
-  verbs: ["get", "list", "create", "update", "patch", "delete"]  verbs: ["get", "list", "create", "update", "patch", "delete"]
-- apiGroups: [""]- apiGroups: [""]
-  resources: ["configmaps"]  resources: ["configmaps"]
-  verbs: ["get", "list", "create", "update", "patch"]  verbs: ["get", "list", "create", "update", "patch"]
-- apiGroups: [""]- apiGroups: [""]
-  resources: ["pods"]  resources: ["pods"]
-  verbs: ["get", "list"]  verbs: ["get", "list"]
-- apiGroups: [""]- apiGroups: [""]
-  resources: ["pods/exec"]  resources: ["pods/exec"]
-  verbs: ["create"]  verbs: ["create"]
-- apiGroups: ["apps"]- apiGroups: ["apps"]
-  resources: ["deployments"]  resources: ["deployments"]
-  verbs: ["get", "list"]  verbs: ["get", "list"]
-- apiGroups: ["externaldns.k8s.io"]- apiGroups: ["externaldns.k8s.io"]
-  resources: ["dnsendpoints"]  resources: ["dnsendpoints"]
-  verbs: ["get", "list", "create", "update", "patch", "delete"]  verbs: ["get", "list", "create", "update", "patch", "delete"]
-{{- end }}{{- end }}
-{{- if or (and .Values.dkim.enabled .Values.dkim.autoGenerate) (and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords) }}{{- if or (and .Values.dkim.enabled .Values.dkim.autoGenerate) (and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords) }}
-- apiGroups: [""]- apiGroups: [""]
-  resources: ["secrets"]  resources: ["secrets"]
-  verbs: ["get", "list", "create", "update", "patch", "delete"]  verbs: ["get", "list", "create", "update", "patch", "delete"]
-{{- end }}{{- end }}
-------
-apiVersion: rbac.authorization.k8s.io/v1apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBindingkind: RoleBinding
-metadata:metadata:
-  name: {{ include "mail-relay.fullname" . }}-manager  name: {{ include "mail-relay.fullname" . }}-manager
-  labels:  labels:
-    {{- include "mail-relay.labels" . | nindent 4 }}    {{- include "mail-relay.labels" . | nindent 4 }}
-  annotations:  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-2"    "helm.sh/hook-weight": "-2"
-    "helm.sh/hook-delete-policy": before-hook-creation    "helm.sh/hook-delete-policy": before-hook-creation
-subjects:subjects:
-- kind: ServiceAccount- kind: ServiceAccount
-  name: {{ include "mail-relay.serviceAccountName" . }}  name: {{ include "mail-relay.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}  namespace: {{ .Release.Namespace }}
-roleRef:roleRef:
-  kind: Role  kind: Role
-  name: {{ include "mail-relay.fullname" . }}-manager  name: {{ include "mail-relay.fullname" . }}-manager
-  apiGroup: rbac.authorization.k8s.io  apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: Role
-  name: {{ include "mail-relay.fullname" . }}-dns-manager
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-
-{{- if and .Values.dkim.enabled .Values.dkim.autoGenerate }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "mail-relay.fullname" . }}-dkim-manager
+  name: {{ include "mail-relay.fullname" . }}-manager
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
   annotations:
@@ -73,14 +10,36 @@ metadata:
     "helm.sh/hook-weight": "-2"
     "helm.sh/hook-delete-policy": before-hook-creation
 rules:
+# Always include basic secret management for DKIM and other needs
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "create", "update", "patch", "delete"]
+{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
+# External DNS management permissions
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+- apiGroups: ["externaldns.k8s.io"]
+  resources: ["dnsendpoints"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "mail-relay.fullname" . }}-dkim-manager
+  name: {{ include "mail-relay.fullname" . }}-manager
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
   annotations:
@@ -93,6 +52,5 @@ subjects:
   namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: {{ include "mail-relay.fullname" . }}-dkim-manager
+  name: {{ include "mail-relay.fullname" . }}-manager
   apiGroup: rbac.authorization.k8s.io
-{{- end }}
