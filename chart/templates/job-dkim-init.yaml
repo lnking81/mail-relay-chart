@@ -22,7 +22,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: dkim-init
-        image: bitnami/kubectl:latest
+        image: alpine/k8s:1.28.2
         command:
         - /bin/sh
         - -c
@@ -30,9 +30,9 @@ spec:
           set -e
           echo "🔐 DKIM Initialization Job - $(date)"
 
-          # Install required packages (kubectl is already available in bitnami/kubectl)
+          # Install required packages (kubectl is already available in alpine/k8s)
           # Install openssl and other tools
-          apt-get update && apt-get install -y openssl curl jq
+          apk add --no-cache openssl curl jq
 
           {{- range $index, $domain := .Values.mail.domains }}
           {{- if not $domain.dkim }}
