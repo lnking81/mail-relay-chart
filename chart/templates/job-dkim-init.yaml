@@ -8,8 +8,8 @@ metadata:
     {{- include "mail-relay.labels" . | nindent 4 }}
     app.kubernetes.io/component: dkim-init
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-1"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   template:

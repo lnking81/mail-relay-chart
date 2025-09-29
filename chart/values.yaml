@@ -72,6 +72,9 @@ mail:
       #   dnsRecord: "v=DKIM1;h=sha256;k=rsa;p=MIIBIjANBgkqhkiG..."
       #   selector: "mail"  # Override default selector for this domain
 
+  smtp:
+    tlsSecurityLevel: "may"
+
   # Relay configuration
   relayHost: "" # External SMTP relay host (optional)
   relayPort: 587
