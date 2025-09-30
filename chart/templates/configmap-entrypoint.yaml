@@ -212,41 +212,52 @@ data:
     }
 
     # ---------------------- OpenDKIM ----------------------
-    generate_dkim_keys() {
-        [ "${DKIM_AUTO_GENERATE:-false}" = "true" ] || return 0
-        [ ${#DKIM_DOMAINS_ARR[@]} -gt 0 ] || { warn "DKIM_AUTO_GENERATE=true but no domains"; return 0; }
-        ensure_dir "$DKIM_KEYS_DIR" opendkim opendkim 750 || true
-        local domain priv
-        for domain in "${DKIM_DOMAINS_ARR[@]}"; do
-            priv="$DKIM_KEYS_DIR/${domain}.private"
-            if [ ! -f "$priv" ]; then
-                info "Generating DKIM key for $domain"
-                opendkim-genkey -b "${DKIM_KEY_SIZE:-2048}" -s "${DKIM_SELECTOR:-mail}" -d "$domain" -D /tmp
-                mv "/tmp/${DKIM_SELECTOR:-mail}.private" "$priv"
-                mv "/tmp/${DKIM_SELECTOR:-mail}.txt" "$DKIM_KEYS_DIR/${domain}.txt"
-                chown opendkim:opendkim "$priv" "$DKIM_KEYS_DIR/${domain}.txt" 2>/dev/null || true
-                chmod 600 "$priv"; chmod 644 "$DKIM_KEYS_DIR/${domain}.txt" 2>/dev/null || true
-                info "DKIM DNS record for $domain:"; cat "$DKIM_KEYS_DIR/${domain}.txt"
-            fi
-        done
-    }
+    # Copy DKIM keys from Kubernetes secrets to OpenDKIM directory
+    # Keys are mounted from secrets at /data/dkim-secrets/{domain}/
+    # and need to be copied to /etc/opendkim/keys/ for OpenDKIM to use
+    sync_dkim_keys_from_secrets() {
+        [ "${DKIM_ENABLED:-false}" = "true" ] || return 0
+        [ ${#DKIM_DOMAINS_ARR[@]} -gt 0 ] || { warn "DKIM enabled but no domains configured"; return 0; }
 
-    sync_dkim_keys_local() {
         ensure_dir "$LOCAL_DKIM_KEYS_DIR" opendkim opendkim 700
-        local domain src_priv
+
+        local domain secret_dir private_key_file dns_record_file
         for domain in "${DKIM_DOMAINS_ARR[@]}"; do
-            src_priv="$DKIM_KEYS_DIR/${domain}.private"
-            [ -f "$src_priv" ] || { warn "No key found for $domain yet"; continue; }
-            cp "$src_priv" "$LOCAL_DKIM_KEYS_DIR/${domain}.private"
-            cp "$DKIM_KEYS_DIR/${domain}.txt" "$LOCAL_DKIM_KEYS_DIR/${domain}.txt" 2>/dev/null || true
-            chown opendkim:opendkim "$LOCAL_DKIM_KEYS_DIR/${domain}.private" || true
+            secret_dir="/data/dkim-secrets/${domain}"
+
+            if [ ! -d "$secret_dir" ]; then
+                warn "DKIM secret directory not found for $domain at $secret_dir"
+                continue
+            fi
+
+            private_key_file="$secret_dir/private.key"
+            dns_record_file="$secret_dir/dns.record"
+
+            if [ ! -f "$private_key_file" ]; then
+                warn "DKIM private key not found for $domain at $private_key_file"
+                continue
+            fi
+
+            info "Installing DKIM key for $domain from Kubernetes secret"
+
+            # Copy private key to OpenDKIM directory
+            cp "$private_key_file" "$LOCAL_DKIM_KEYS_DIR/${domain}.private"
+            chown opendkim:opendkim "$LOCAL_DKIM_KEYS_DIR/${domain}.private"
             chmod 600 "$LOCAL_DKIM_KEYS_DIR/${domain}.private"
-            chown opendkim:opendkim "$LOCAL_DKIM_KEYS_DIR/${domain}.txt" 2>/dev/null || true
-            chmod 644 "$LOCAL_DKIM_KEYS_DIR/${domain}.txt" 2>/dev/null || true
+
+            # Copy DNS record if available (for reference/logging)
+            if [ -f "$dns_record_file" ]; then
+                cp "$dns_record_file" "$LOCAL_DKIM_KEYS_DIR/${domain}.txt"
+                chown opendkim:opendkim "$LOCAL_DKIM_KEYS_DIR/${domain}.txt"
+                chmod 644 "$LOCAL_DKIM_KEYS_DIR/${domain}.txt"
+                info "DKIM DNS record for $domain: $(cat "$dns_record_file")"
+            fi
+
+            # Verify OpenDKIM can read the key
             if su -s /bin/bash opendkim -c "[ -r '$LOCAL_DKIM_KEYS_DIR/${domain}.private' ]"; then
-                info "OpenDKIM can read key for $domain"
+                info "✅ OpenDKIM can read key for $domain"
             else
-                warn "OpenDKIM cannot read key for $domain"
+                error "❌ OpenDKIM cannot read key for $domain"
             fi
         done
     }
@@ -259,8 +270,7 @@ data:
         safe_copy /tmp/opendkim-config/KeyTable /etc/opendkim/KeyTable 644 root:root
         safe_copy /tmp/opendkim-config/SigningTable /etc/opendkim/SigningTable 644 root:root
         parse_domains
-        generate_dkim_keys
-        sync_dkim_keys_local
+        sync_dkim_keys_from_secrets
         ensure_dir /var/run/opendkim opendkim opendkim 755
         info "OpenDKIM configuration completed"
     }
