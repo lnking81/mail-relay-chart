@@ -12,8 +12,6 @@ data:
     metadata:
       name: {{ .Release.Name }}-dns
       namespace: {{ .Release.Namespace }}
-      annotations:
-        external-dns.alpha.kubernetes.io/owner-id: {{ .Values.externalDns.ownerId | quote }}
       labels:
         app.kubernetes.io/name: {{ include "mail-relay.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -37,18 +35,18 @@ data:
       - dnsName: {{ $domain.name }}
         recordTTL: {{ $.Values.externalDns.ttl }}
         recordType: TXT
-        targets: ["\"v=spf1 ip4:${CURRENT_IP} a:{{ $.Values.mail.hostname }} ~all\""]
+        targets: ["v=spf1 ip4:${CURRENT_IP} a:{{ $.Values.mail.hostname }} ~all"]
       # DMARC Record for {{ $domain.name }}
       - dnsName: _dmarc.{{ $domain.name }}
         recordTTL: {{ $.Values.externalDns.ttl }}
         recordType: TXT
-        targets: ["\"{{ $.Values.externalDns.dmarcPolicy }}\""]
+        targets: ["{{ $.Values.externalDns.dmarcPolicy }}"]
 {{- if and $.Values.dkim.enabled $.Values.dkim.autoGenerate }}
       # DKIM Record for {{ $domain.name }}
       - dnsName: {{ $.Values.dkim.selector | default "mail" }}._domainkey.{{ $domain.name }}
         recordTTL: {{ $.Values.externalDns.ttl }}
         recordType: TXT
-        targets: ["\"${DKIM_RECORD_{{ $index }}}\""]
+        targets: ["${DKIM_RECORD_{{ $index }}}"]
 {{- end }}
 {{- end }}
 {{- end }}
