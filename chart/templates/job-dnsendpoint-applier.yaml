@@ -1,7 +1,7 @@
 {{- /*
 Refactored: Post-install/upgrade job to ensure DNSEndpoint exists/updated.
 Uses shared script (configmap-dns-manager-script) to avoid duplication with cron.
-Always runs on install/upgrade. If ipDetection=true the script will detect current IP; else uses all configured external IPs.
+By default runs only on install. Set hooks.runOnUpgrade=true to run on upgrades too.
 */ -}}
 {{- $ipDetection := eq (include "mail-relay.dnsHelper.ipDetection" .) "true" -}}
 {{- $externalIps := .Values.dnsHelper.externalIps | default (list) -}}
@@ -13,7 +13,11 @@ metadata:
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
   annotations:
+    {{- if .Values.hooks.runOnUpgrade }}
     "helm.sh/hook": post-install,post-upgrade
+    {{- else }}
+    "helm.sh/hook": post-install
+    {{- end }}
     "helm.sh/hook-weight": "15"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:

@@ -2,7 +2,7 @@ apiVersion: v2
 name: mail-relay
 description: A Helm chart for deploying a mail relay server with Postfix and OpenDKIM
 type: application
-version: 0.1.0
+version: 0.0.12
 appVersion: "latest"
 keywords:
   - mail

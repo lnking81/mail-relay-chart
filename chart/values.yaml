@@ -182,6 +182,19 @@ monitoring:
     labels: {}
     interval: 30s
 
+# Helm hooks configuration
+hooks:
+  # Run DKIM/DNS initialization jobs on helm upgrade (not just install)
+  # Default: false - jobs only run on initial install for faster upgrades
+  #
+  # IMPORTANT: Set to true (or use --set hooks.runOnUpgrade=true) when:
+  # - Adding new domains to mail.domains
+  # - Changing DKIM selectors
+  # - Need to regenerate DKIM keys
+  #
+  # For regular upgrades (no mail config changes), keep false for faster deploys
+  runOnUpgrade: false
+
 # Health checks
 healthCheck:
   enabled: true

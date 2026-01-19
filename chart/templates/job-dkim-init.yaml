@@ -1,4 +1,5 @@
 {{- if and .Values.dkim.enabled .Values.dkim.autoGenerate }}
+{{- $domainsHash := (toJson .Values.mail.domains) | sha256sum | trunc 8 }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -8,9 +9,19 @@ metadata:
     {{- include "mail-relay.labels" . | nindent 4 }}
     app.kubernetes.io/component: dkim-init
   annotations:
+    # Always run on install. Run on upgrade only if hooks.runOnUpgrade=true
+    # Note: If you add new domains, you MUST either:
+    # 1. Set hooks.runOnUpgrade=true for that upgrade, or
+    # 2. Manually create DKIM secrets for new domains before upgrade
+    {{- if .Values.hooks.runOnUpgrade }}
     "helm.sh/hook": pre-install,pre-upgrade
+    {{- else }}
+    "helm.sh/hook": pre-install
+    {{- end }}
     "helm.sh/hook-weight": "-1"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Track domains hash to detect changes (informational only)
+    mail-relay.io/domains-hash: "{{ $domainsHash }}"
 spec:
   template:
     metadata:
