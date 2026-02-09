@@ -459,10 +459,16 @@ data:
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "description": "Current delay applied per destination domain. Higher = slower delivery.",
+          "description": "Domains with elevated delay (above initial 5s). Shows only domains that experienced rate limiting.",
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "color-background" },
+                "filterable": true,
+                "inspect": false
+              },
               "mappings": [],
               "thresholds": { "mode": "absolute", "steps": [
                 { "color": "green", "value": null },
@@ -472,27 +478,45 @@ data:
               ]},
               "unit": "ms"
             },
-            "overrides": []
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Domain" },
+                "properties": [
+                  { "id": "custom.width", "value": 200 },
+                  { "id": "custom.cellOptions", "value": { "type": "auto" } }
+                ]
+              }
+            ]
           },
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
           "id": 41,
           "options": {
-            "colorMode": "value",
-            "graphMode": "area",
-            "justifyMode": "auto",
-            "orientation": "horizontal",
-            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-            "textMode": "value_and_name"
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Delay" }]
           },
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "topk(10, haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"})",
-            "legendFormat": "{{`{{domain}}`}}",
+            "expr": "haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"} > 5000",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
             "refId": "A"
           }],
-          "title": "Current Delay by Domain",
-          "type": "stat"
+          "title": "Elevated Delay by Domain",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true },
+                "indexByName": {},
+                "renameByName": { "domain": "Domain", "Value": "Delay" }
+              }
+            }
+          ],
+          "type": "table"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
@@ -500,6 +524,12 @@ data:
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "color-background" },
+                "filterable": true,
+                "inspect": false
+              },
               "mappings": [],
               "thresholds": { "mode": "absolute", "steps": [
                 { "color": "green", "value": null },
@@ -509,27 +539,45 @@ data:
               ]},
               "unit": "short"
             },
-            "overrides": []
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Domain" },
+                "properties": [
+                  { "id": "custom.width", "value": 200 },
+                  { "id": "custom.cellOptions", "value": { "type": "auto" } }
+                ]
+              }
+            ]
           },
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
           "id": 42,
           "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "horizontal",
-            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-            "textMode": "value_and_name"
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Streak" }]
           },
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "topk(10, haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0)",
-            "legendFormat": "{{`{{domain}}`}}",
+            "expr": "haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
             "refId": "A"
           }],
           "title": "Rate Limit Streak by Domain",
-          "type": "stat"
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true },
+                "indexByName": {},
+                "renameByName": { "domain": "Domain", "Value": "Streak" }
+              }
+            }
+          ],
+          "type": "table"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
@@ -537,35 +585,60 @@ data:
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "color-background" },
+                "filterable": true,
+                "inspect": false
+              },
               "mappings": [],
               "thresholds": { "mode": "absolute", "steps": [
                 { "color": "green", "value": null },
                 { "color": "yellow", "value": 1 },
                 { "color": "red", "value": 10 }
               ]},
-              "unit": "short"
+              "unit": "short",
+              "decimals": 0
             },
-            "overrides": []
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Domain" },
+                "properties": [
+                  { "id": "custom.width", "value": 200 },
+                  { "id": "custom.cellOptions", "value": { "type": "auto" } }
+                ]
+              }
+            ]
           },
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
           "id": 43,
           "options": {
-            "colorMode": "value",
-            "graphMode": "area",
-            "justifyMode": "auto",
-            "orientation": "horizontal",
-            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-            "textMode": "value_and_name"
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Count" }]
           },
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "topk(10, increase(haraka_adaptive_rate_rate_limited_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]))",
-            "legendFormat": "{{`{{domain}}`}}",
+            "expr": "increase(haraka_adaptive_rate_rate_limited_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]) > 0",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
             "refId": "A"
           }],
           "title": "Rate Limited (1h)",
-          "type": "stat"
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true },
+                "indexByName": {},
+                "renameByName": { "domain": "Domain", "Value": "Count" }
+              }
+            }
+          ],
+          "type": "table"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
