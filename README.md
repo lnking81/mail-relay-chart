@@ -1,892 +1,749 @@
 # Mail Relay Helm Chart
 
-A production-ready Helm chart for deploying a secure SMTP mail relay server on Kubernetes with Postfix, OpenDKIM support, and containerized architecture.
+Production-ready Helm chart for deploying a high-performance SMTP mail relay on Kubernetes with [Haraka](https://haraka.github.io/), DKIM signing, and automated DNS management.
 
-## 🚀 Features
+## Features
 
-- **🔐 Secure Mail Relay**: Postfix-based SMTP relay with IPv4-only configuration
-- **✍️ DKIM Signing**: Automatic DKIM key generation and email signing with OpenDKIM
-- **🌐 DNS Management**: Automated DNS record management with external-dns integration
-- **💾 Persistent Storage**: Optional persistent storage for mail queue and DKIM keys
-- **❤️ Health Monitoring**: Built-in health checks and TCP probes
-- **🔒 Security**: Network policies, RBAC, and security contexts
-- **📊 Logging**: Direct stdout logging with supervisord process management
-- **🐳 Containerized**: Supervisord-managed services with environment variable configuration
+| Category           | Features                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| **Mail Server**    | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support   |
+| **Security**       | DKIM signing (auto-generated keys), sender validation whitelist/blacklist, SMTP AUTH |
+| **DNS**            | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns               |
+| **Delivery**       | Static + adaptive rate limiting, per-domain throttling, IP warmup support            |
+| **Inbound**        | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses       |
+| **Webhooks**       | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints      |
+| **Monitoring**     | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                    |
+| **Infrastructure** | Kubernetes-native, non-root container, Network Policies, PVC for queue               |
 
-## 🚨 SECURITY WARNING: Open Relay Prevention
+---
 
-> **⚠️ CRITICAL: Improper configuration when exposing the mail relay externally can make it an OPEN RELAY, allowing spammers to abuse your server!**
+## Table of Contents
 
-### Understanding the Risk
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Configuration Reference](#configuration-reference)
+  - [Basic Mail Settings](#basic-mail-settings)
+  - [DKIM](#dkim)
+  - [DNS Automation](#dns-automation)
+  - [Services](#services)
+  - [PROXY Protocol](#proxy-protocol)
+  - [Sender Validation](#sender-validation)
+  - [SMTP Authentication](#smtp-authentication)
+  - [Rate Limiting](#rate-limiting)
+  - [Adaptive Rate Limiting](#adaptive-rate-limiting)
+  - [Inbound Mail (Bounces/FBL)](#inbound-mail-bouncesfbl)
+  - [Webhooks](#webhooks)
+  - [Monitoring](#monitoring)
+- [Security](#security)
+- [Operations](#operations)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
 
-When you expose the mail relay via `LoadBalancer` or `NodePort`:
+---
 
-1. External traffic may be SNAT'd by Kubernetes to internal IPs (e.g., `10.x.x.x`)
-2. If `trustedNetworks` includes broad ranges like `10.0.0.0/8`, external attackers appear as "trusted"
-3. Postfix will relay mail for anyone appearing to be from a trusted network
+## Quick Start
 
-### Required Security Configuration
+### Prerequisites
 
-**1. Use restrictive `trustedNetworks`** (MANDATORY):
+- Kubernetes 1.20+
+- Helm 3.2+
+- (Optional) Cloudflare account for DNS automation
+
+### Installation
+
+```bash
+# Add repo (if published to GitHub Pages)
+helm repo add mail-relay https://lnking81.github.io/mail-relay-chart
+helm repo update
+
+# Or install from local clone
+git clone https://github.com/lnking81/mail-relay-chart.git
+cd mail-relay-chart
+
+# Minimal installation
+helm install mail-relay ./chart -n mail --create-namespace \
+  --set mail.hostname=mail.example.com \
+  --set mail.domains[0].name=example.com
+
+# With custom values
+helm install mail-relay ./chart -n mail --create-namespace -f my-values.yaml
+```
+
+### Minimal values.yaml
 
 ```yaml
 mail:
+  hostname: mail.example.com
+  domains:
+    - name: example.com
+      dkimSelector: mail
+
+services:
+  - type: LoadBalancer
+    port: 25
+    targetPort: 25
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Cluster                        │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    Mail Relay Pod                          │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │  │
+│  │  │   Haraka    │  │ DNS Watcher │  │ Init Containers │   │  │
+│  │  │  (SMTP)     │  │  (Sidecar)  │  │ - DKIM Init     │   │  │
+│  │  │             │  │             │  │ - DNS Init      │   │  │
+│  │  │  Plugins:   │  │ - Monitor   │  └─────────────────┘   │  │
+│  │  │  - DKIM     │  │   IP changes│                        │  │
+│  │  │  - Relay    │  │ - Update    │  ┌─────────────────┐   │  │
+│  │  │  - Webhook  │  │   DNS       │  │   Volumes       │   │  │
+│  │  │  - Limit    │  └─────────────┘  │ - Config        │   │  │
+│  │  │  - ...      │                   │ - DKIM Keys     │   │  │
+│  │  └──────┬──────┘                   │ - Queue (PVC)   │   │  │
+│  │         │                          └─────────────────┘   │  │
+│  └─────────┼────────────────────────────────────────────────┘  │
+│            │                                                     │
+│  ┌─────────▼─────────┐    ┌────────────────────┐               │
+│  │  Service (LB/NP)  │    │  Secrets           │               │
+│  │  Port 25          │    │  - DKIM private    │               │
+│  │  PROXY Protocol   │    │  - Cloudflare API  │               │
+│  └─────────┬─────────┘    └────────────────────┘               │
+└────────────┼────────────────────────────────────────────────────┘
+             │
+             ▼
+┌────────────────────────┐    ┌────────────────────┐
+│  External Clients      │    │  DNS Provider      │
+│  (Applications)        │    │  (Cloudflare/etc)  │
+└────────────────────────┘    └────────────────────┘
+```
+
+### Components
+
+| Component          | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| **Haraka**         | High-performance Node.js SMTP server                     |
+| **DKIM Init**      | Generates RSA keys per domain, stores in K8s Secrets     |
+| **DNS Init**       | Creates DNS records, waits for propagation               |
+| **DNS Watcher**    | Monitors IP changes, updates DNS automatically           |
+| **Custom Plugins** | Webhooks, adaptive rate, sender validation, VERP bounces |
+
+---
+
+## Configuration Reference
+
+### Basic Mail Settings
+
+```yaml
+mail:
+  # FQDN for SMTP banner and HELO
+  hostname: mail.example.com
+
+  # Domains to handle (each gets its own DKIM key)
+  domains:
+    - name: example.com
+      dkimSelector: mail
+    - name: another.com
+      dkimSelector: mail
+
+  # Networks allowed to relay (no auth required)
   trustedNetworks:
-    - "127.0.0.0/8" # Localhost only
-    - "10.42.0.0/16" # Your SPECIFIC pod CIDR (example)
-    # DO NOT use 10.0.0.0/8 or other wide ranges!
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+  # Upstream relay (optional - direct delivery if disabled)
+  relay:
+    enabled: false
+    host: smtp.sendgrid.net
+    port: 587
+    tls: true
+    auth:
+      enabled: true
+      username: apikey
+      password: ""
+      existingSecret: "" # Secret with keys: username, password
 ```
 
-**2. Enable `externalTrafficPolicy: Local`** (CRITICAL for external exposure):
+### Haraka Settings
 
 ```yaml
-service:
-  type: LoadBalancer
-  externalTrafficPolicy: "Local" # Preserves real client IPs!
+haraka:
+  # Custom SMTP banner (hides version)
+  smtpBanner: "ready"
+  bannerUuidChars: 0 # Hide UUID in banner
+
+  # Max message size (bytes), 0 = unlimited
+  maxMessageSize: 26214400 # 25 MB
+
+  # Outbound concurrency
+  concurrency: 50
+
+  # IP preference: "default", "v4", "v6"
+  inetPrefer: "v4"
+
+  # Queue directory
+  queueDir: /data/queue
 ```
 
-**3. Enable Network Policies** (Defense in depth):
+### DKIM
 
 ```yaml
-networkPolicy:
+dkim:
+  # Enable DKIM signing
   enabled: true
-  ingress:
-    allowedCIDRs:
-      - "10.42.0.0/16" # Your pod network only
+
+  # RSA key size (2048 or 4096)
+  keySize: 2048
+
+  # Keys auto-generated and stored in K8s Secrets:
+  # {release}-dkim-{domain-with-dashes}
 ```
 
-### Testing for Open Relay
-
-After deployment, test from an EXTERNAL network:
+DKIM keys are generated automatically on first install. To view:
 
 ```bash
-# From outside your cluster
-telnet <loadbalancer-ip> 25
-EHLO test.com
-MAIL FROM: <attacker@evil.com>
-RCPT TO: <victim@gmail.com>
-
-# If you see "250 Ok" for RCPT TO, you have an OPEN RELAY!
-# Expected response: "554 Relay access denied"
+kubectl get secret -n mail -l app.kubernetes.io/component=dkim
 ```
 
-### Quick Security Checklist
+### DNS Automation
 
-- [ ] `trustedNetworks` contains ONLY specific, narrow CIDRs
-- [ ] `externalTrafficPolicy: "Local"` is set (for LoadBalancer/NodePort)
-- [ ] Network policies are enabled
-- [ ] Tested relay restrictions from external network
+```yaml
+dns:
+  enabled: true
 
-## 🔄 PROXY Protocol Support
+  # Provider: "cloudflare" or "external-dns"
+  provider: cloudflare
 
-Haraka supports HAProxy PROXY Protocol (v1 and v2), enabling real client IP preservation when using LoadBalancers that support it (AWS NLB, HAProxy, Nginx, MetalLB, etc.).
+  cloudflare:
+    apiToken: "" # Use existingSecret in production
+    existingSecret: "cloudflare-api-token"
+    # zoneIds:    # Optional, auto-detected from domain
+    #   example.com: "abc123..."
 
-### Benefits
+  # Records to create
+  records:
+    a: true # A record for mail hostname
+    mx: true # MX record for domains
+    spf: true # SPF TXT record
+    dkim: true # DKIM TXT record
+    dmarc: true # DMARC TXT record
 
-- **Real Client IP Logging**: Logs show actual sender IPs, not load balancer IPs
-- **SPF Validation**: SPF checks work correctly with the original client IP
-- **Network Policies**: Filter by real client IPs instead of proxy IPs
-- **Allows `externalTrafficPolicy: Cluster`**: Get load balancing benefits while preserving client IPs
+  # Policies
+  spfPolicy: "~all" # ~all (softfail), -all (hardfail)
+  dmarcPolicy: none # none, quarantine, reject
+  ttl: 300
 
-### Configuration
+  # IP detection
+  ip:
+    fromService: true # Detect from LoadBalancer
+    detectOutbound: true # Detect outbound NAT IP
+    static: [] # Or specify manually
+
+  # IP change watcher sidecar
+  watcher:
+    enabled: true
+    interval: 60
+
+  # Wait for DNS before starting Haraka
+  waitForRecords:
+    enabled: true
+    timeout: 600
+```
+
+### Services
+
+Flexible multi-service configuration:
+
+```yaml
+services:
+  # Main LoadBalancer with PROXY protocol
+  - name: "" # Empty = release name
+    type: LoadBalancer
+    port: 25
+    targetPort: 25
+    proxyProtocol: true
+    loadBalancerClass: "hcloud"
+    externalTrafficPolicy: "Local"
+
+  # Internal ClusterIP (no PROXY protocol)
+  - name: internal
+    type: ClusterIP
+    port: 25
+    targetPort: 2525
+    proxyProtocol: false
+```
+
+Each unique `targetPort` creates a Haraka listener. Ports with `proxyProtocol: true` expect PROXY headers.
+
+### PROXY Protocol
+
+Preserve real client IP through load balancers:
 
 ```yaml
 haraka:
   proxyProtocol:
-    # Enable PROXY protocol parsing
-    enabled: true
+    # Auto-detect trusted proxies from LoadBalancer status
+    autoDetect: true
 
-    # Trust only your load balancer network
+    # Or specify manually
     trustedProxies:
-      - "10.0.0.0/8" # LoadBalancer internal network
-      # - "172.16.0.0/12"   # Additional trusted networks
+      - "10.0.0.0/8"
+      - "192.168.1.100"
+
+services:
+  - type: LoadBalancer
+    port: 25
+    targetPort: 25
+    proxyProtocol: true # This port expects PROXY headers
 ```
 
-### LoadBalancer Configuration Examples
+### Sender Validation
 
-**AWS Network Load Balancer (NLB):**
+Restrict who can send through this relay:
 
 ```yaml
-service:
-  type: LoadBalancer
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
-
-haraka:
-  proxyProtocol:
+mail:
+  senderValidation:
     enabled: true
-    trustedProxies:
-      - "10.0.0.0/8" # VPC CIDR
+    checkFromHeader: true # Verify From header matches MAIL FROM
+
+    # Whitelist (if empty, all mail.domains allowed)
+    allowedFrom:
+      - "service@partner.com" # Specific address
+      - "partner.com" # Entire domain
+      - "/.*@notifications\\./" # Regex pattern
+
+    # Blacklist (takes priority)
+    forbiddenFrom:
+      - "ceo@example.com"
+      - "hr@example.com"
 ```
 
-**MetalLB with PROXY Protocol:**
+### SMTP Authentication
+
+Allow external clients to authenticate:
 
 ```yaml
-service:
-  type: LoadBalancer
-  annotations:
-    metallb.universe.tf/loadBalancerIPs: "192.168.1.100"
+auth:
+  enabled: true
+  methods: "PLAIN,LOGIN"
+  requireTls: true
+  constrainSender: true # MAIL FROM must match auth user
 
-# Requires external proxy (HAProxy/Nginx) with PROXY protocol enabled
-haraka:
-  proxyProtocol:
-    enabled: true
-    trustedProxies:
-      - "192.168.1.0/24" # Proxy server network
+  # Inline users (use existingSecret in production)
+  users:
+    sender@example.com: "password123"
+
+  # Or use existing secret
+  existingSecret: "smtp-auth-users"
 ```
 
-### ⚠️ Important Notes
+### Rate Limiting
 
-1. **Both sides must agree**: LoadBalancer MUST send PROXY headers when Haraka expects them
-2. **Trust only your proxies**: Never trust `0.0.0.0/0` in production - attackers could spoof client IPs
-3. **Test thoroughly**: Misconfiguration breaks SMTP connections entirely
-
-## � Delivery Rate Limiting (Gmail/Yahoo Warmup)
-
-Major email providers (Gmail, Yahoo, Microsoft) throttle or block new senders who deliver too fast. This feature lets you slow down outbound delivery to build reputation gradually.
-
-### Why Rate Limiting Matters
-
-Gmail doesn't block Haraka — **Gmail blocks behavior typical of spammers**:
-
-- Instant bursts of many messages
-- Multiple concurrent connections
-- No natural pauses between deliveries
-
-A "trusted" mail server looks like a slow, old Postfix from 2008.
-
-### Configuration
+Static per-domain rate limits:
 
 ```yaml
 rateLimit:
   enabled: true
 
-  # Per-domain limits for major providers
+  global:
+    maxConnections: 100
+    maxPerConnection: 50
+    delayBetweenMessages: 0
+
   domains:
     gmail.com:
       enabled: true
-      maxConnections: 1 # Only 1 connection at a time
-      maxPerConnection: 3 # Max 3 messages per connection
-      rate: "1/20s" # 1 message every 20 seconds
-      delayMs: 15000 # 15 second delay between messages
+      maxConnections: 1
+      maxPerConnection: 3
+      rate: "1/20s"
+      delayMs: 15000
 
     outlook.com:
       enabled: true
       maxConnections: 2
       rate: "1/10s"
 
-  # Custom domain limits
   customDomains:
-    corporate-client.com:
+    corporate.com:
       maxConnections: 5
-      rate: "10/1m" # 10 messages per minute
+      rate: "10/1m"
 ```
 
-### IP Warmup Schedule
+### Adaptive Rate Limiting
 
-For new IPs, gradually increase volume over 1-2 weeks:
-
-| Day | Gmail messages/day |
-| --- | ------------------ |
-| 1   | 20                 |
-| 2   | 40                 |
-| 3   | 80                 |
-| 4   | 150                |
-| 5   | 300                |
-| 6   | 600                |
-| 7   | 1000               |
-
-After 7+ days with good delivery, Gmail will automatically increase your limits.
-
-### Success Indicators
-
-In Haraka logs:
-
-```
-# ❌ Bad - Gmail doesn't trust you
-421 4.7.0 Try again later
-
-# ✅ Good - Delivered successfully
-250 2.0.0 OK
-
-# ✅ Great - Gmail trusts you but regulates pace
-421 4.7.28 Rate limited, try again later
-```
-
-The `4.7.28` response means Gmail trusts your server but wants you to slow down temporarily.
-
-## 🔄 Adaptive Rate Limiting (Dynamic)
-
-Static rate limits work but require manual tuning. **Adaptive rate limiting** automatically adjusts delivery speed based on server responses:
-
-- **On 421/rate limit errors**: Slows down (exponential backoff)
-- **On successful deliveries**: Speeds up (gradual recovery)
-- **Per-domain tracking**: Each domain has independent rate state
-
-### How It Works
-
-```
-Start: delay=20s for gmail.com
-
-Deliver → Success → Success → Success → Success → Success (5 in a row)
-→ delay reduced to 18s (recovery)
-
-Deliver → 421 4.7.28 Rate limited
-→ delay increased to 36s (backoff ×2)
-→ Extra penalty: delay increased to 54s (rate limit detected)
-
-Continue delivering...
-→ After many successes: delay returns to minimum (15s)
-```
-
-### Configuration
+Auto-adjust delivery speed based on server responses:
 
 ```yaml
 adaptiveRate:
   enabled: true
 
-  # Default settings
   defaults:
-    minDelay: 1000 # Won't go faster than 1 second
-    maxDelay: 60000 # Won't go slower than 60 seconds
-    initialDelay: 5000 # Start at 5 seconds
-    backoffMultiplier: 1.5 # +50% delay on failure
-    recoveryRate: 0.9 # -10% delay on success
-    successThreshold: 5 # Need 5 successes to speed up
+    minDelay: 1000 # Never faster than 1s
+    maxDelay: 60000 # Never slower than 60s
+    initialDelay: 5000 # Start at 5s
+    backoffMultiplier: 1.5 # +50% on failure
+    recoveryRate: 0.9 # -10% on success
+    successThreshold: 5 # Successes before speedup
 
-  # Per-domain settings (Gmail needs extra care)
   domains:
     gmail.com:
       enabled: true
-      minDelay: 15000 # 15 second minimum
-      maxDelay: 120000 # 2 minute maximum
-      initialDelay: 20000 # Start at 20 seconds
-      backoffMultiplier: 2.0 # Double on failure
-      successThreshold: 10 # Need 10 successes
+      minDelay: 15000
+      maxDelay: 120000
+      initialDelay: 20000
+      backoffMultiplier: 2.0
+      successThreshold: 10
 ```
 
-### Static vs Adaptive Rate Limiting
+**How it works:**
 
-| Aspect                   | Static (`rateLimit`)  | Adaptive (`adaptiveRate`) |
-| ------------------------ | --------------------- | ------------------------- |
-| Configuration            | Fixed rate per domain | Auto-adjusts              |
-| New IP warmup            | Manual schedule       | Automatic                 |
-| Responds to 421 errors   | No                    | Yes (slows down)          |
-| Recovery after good runs | No                    | Yes (speeds up)           |
-| Use case                 | Hard safety caps      | Dynamic optimization      |
+1. Start at `initialDelay`
+2. On 421/rate-limit: `delay × backoffMultiplier`
+3. On N consecutive successes: `delay × recoveryRate`
+4. Bounded by `minDelay` / `maxDelay`
 
-**Recommendation**: Use both together:
+### Inbound Mail (Bounces/FBL)
+
+Handle bounces and spam complaints with correlation to original message:
 
 ```yaml
-# Hard cap - never exceed these limits
-rateLimit:
+inbound:
   enabled: true
-  domains:
-    gmail.com:
+  clientIdHeader: "X-Message-ID" # Your app provides this
+
+  recipients:
+    - postmaster
+    - abuse
+    - "bounce+" # VERP: bounce+{id}@domain
+    - fbl
+
+  bounce:
+    enabled: true
+    verpPrefix: "bounce+"
+    useSenderDomain: true # bounce+id@sender-domain.com
+    hmacSecret: "" # Auto-generated if empty
+    requireHmac: true # Reject forged bounces
+    maxAgeDays: 7
+
+  security:
+    spf:
       enabled: true
-      rate: "1/10s" # Absolute maximum: 6/minute
-
-# Dynamic within cap - auto-tune actual rate
-adaptiveRate:
-  enabled: true
-  domains:
-    gmail.com:
+      rejectFail: true
+    dkim:
       enabled: true
-      minDelay: 15000 # Will be slower than cap when needed
+    dmarc:
+      enabled: true
+      rejectOnFail: true
 ```
 
-## �📋 Architecture
+**Flow:**
 
-```mermaid
-graph TB
-    A[Applications] --> B[Mail Relay Pod]
-    B --> C[External SMTP Provider]
-
-    subgraph "Mail Relay Pod"
-        D[Postfix SMTP]
-        E[OpenDKIM]
-        F[Supervisord]
-        G[Entrypoint Script]
-    end
-
-    B --> H[Persistent Storage]
-    I[External DNS] --> J[DNS Provider]
-    B -.-> I
-
-    G --> F
-    F --> D
-    F --> E
-    D --> E
+```
+1. Client sends: X-Message-ID: order-123
+2. Haraka sets: Return-Path: bounce+{ts}-{hmac}-order-123@domain
+3. Bounce arrives: To: bounce+{ts}-{hmac}-order-123@domain
+4. Webhook: { event: "bounce_received", message_id: "order-123" }
 ```
 
-## ⚡ Quick Start
+### Webhooks
 
-### Prerequisites
-
-- Kubernetes 1.20+
-- Helm 3.2+
-- LoadBalancer service support
-- Container registry access (for custom builds)
-
-### Installation
-
-1. **Clone the repository**:
-
-```bash
-git clone https://github.com/lnking81/mail-relay-chart.git
-cd mail-relay-chart
-```
-
-2. **Configure your values**:
-
-```bash
-cp values.byc.yaml my-values.yaml
-# Edit my-values.yaml with your configuration
-```
-
-3. **Install the chart**:
-
-```bash
-# Install from local chart
-helm install my-mail-relay ./chart -f my-values.yaml
-
-# Or with namespace
-helm install my-mail-relay ./chart -f my-values.yaml -n mail --create-namespace
-```
-
-## ⚙️ Configuration
-
-### Core Parameters
-
-| Parameter             | Description          | Default                             | Required |
-| --------------------- | -------------------- | ----------------------------------- | -------- |
-| `mail.hostname`       | SMTP server hostname | `mail.example.com`                  | ✅       |
-| `mail.domains[].name` | Domains to handle    | `[]`                                | ✅       |
-| `mail.relayHost`      | External SMTP relay  | `smtp.gmail.com`                    | ✅       |
-| `mail.relayPort`      | External SMTP port   | `587`                               | ✅       |
-| `image.repository`    | Container image      | `ghcr.io/lnking81/mail-relay-chart` | ✅       |
-| `image.tag`           | Container tag        | `latest`                            | ✅       |
-
-### DKIM Configuration
-
-| Parameter           | Description         | Default |
-| ------------------- | ------------------- | ------- |
-| `dkim.enabled`      | Enable DKIM signing | `true`  |
-| `dkim.autoGenerate` | Auto-generate keys  | `true`  |
-| `dkim.keySize`      | RSA key size        | `2048`  |
-
-### Storage Configuration
-
-| Parameter                  | Description               | Default |
-| -------------------------- | ------------------------- | ------- |
-| `persistence.enabled`      | Enable persistent storage | `true`  |
-| `persistence.size`         | Storage size              | `1Gi`   |
-| `persistence.storageClass` | Storage class             | `""`    |
-
-### Example Configuration
+Send delivery events to HTTP endpoints:
 
 ```yaml
-# my-values.yaml
+webhooks:
+  enabled: true
+  timeout: 5000
+  retry: true
+  maxRetries: 3
+
+  endpoints:
+    - name: main
+      url: "https://api.example.com/webhooks/email"
+      events:
+        - delivered
+        - bounced
+        - bounce_received
+        - complaint
+      headers:
+        Authorization: "Bearer token123"
+
+    - name: debug
+      url: "http://localhost:8888/webhook"
+      events:
+        - delivered
+        - bounced
+        - deferred
+```
+
+**Webhook payload:**
+
+```json
+{
+  "event": "delivered",
+  "timestamp": "2024-01-15T10:30:00.000Z",
+  "message_id": "<uuid@domain>",
+  "from": "sender@domain.com",
+  "to": ["recipient@example.com"],
+  "subject": "Hello",
+  "host": "mail.example.com",
+  "response": "250 OK",
+  "delay": 1234
+}
+```
+
+### Monitoring
+
+```yaml
+metrics:
+  enabled: true
+
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    labels:
+      release: monitoring
+
+dashboard:
+  watch:
+    enabled: true # Real-time SMTP traffic
+    sampling: false
+
+  logReader:
+    enabled: false
+
+  port: 8080
+
+  grafana:
+    enabled: true
+    labels:
+      grafana_dashboard: "1"
+```
+
+---
+
+## Security
+
+### Open Relay Prevention
+
+> **CRITICAL**: Misconfigured mail relay = spam source = IP blacklisted
+
+**Required steps:**
+
+1. **Restrict trusted networks:**
+
+```yaml
 mail:
-  hostname: mail.mycompany.com
-  domains:
-    - name: mycompany.com
-      dkimSelector: mail
-  relayHost: smtp.gmail.com
-  relayPort: 587
-  relayCredentials:
-    enabled: true
-    username: "your-username"
-    password: "your-app-password"
-
-dkim:
-  enabled: true
-  autoGenerate: true
-  keySize: 2048
-
-service:
-  type: LoadBalancer
-  loadBalancerIP: "192.168.1.100"
-
-persistence:
-  enabled: true
-  size: 2Gi
-
-externalDns:
-  enabled: true
-  provider: cloudflare
-  autoManageDnsRecords: true
+  trustedNetworks:
+    - "10.42.0.0/16" # Your specific pod CIDR only
+    # NOT 10.0.0.0/8!
 ```
 
-## 🐳 Container Architecture
+2. **Preserve client IP:**
 
-### Environment Variables
-
-The container uses environment variables for configuration:
-
-| Variable                    | Description             | Source                          |
-| --------------------------- | ----------------------- | ------------------------------- |
-| `DKIM_ENABLED`              | Enable DKIM             | `dkim.enabled`                  |
-| `DKIM_AUTO_GENERATE`        | Auto-generate keys      | `dkim.autoGenerate`             |
-| `DKIM_KEY_SIZE`             | RSA key size            | `dkim.keySize`                  |
-| `DKIM_DOMAINS`              | Comma-separated domains | `mail.domains`                  |
-| `RELAY_CREDENTIALS_ENABLED` | Enable SMTP auth        | `mail.relayCredentials.enabled` |
-| `SENDER_ACCESS_ENABLED`     | Enable sender access    | `mail.senderAccess.enabled`     |
-| `PERSISTENCE_ENABLED`       | Enable persistence      | `persistence.enabled`           |
-
-### Process Management
-
-The container uses **supervisord** for robust process management:
-
-| Service    | Purpose                 | Startup Priority | Auto-restart |
-| ---------- | ----------------------- | ---------------- | ------------ |
-| `opendkim` | DKIM email signing      | 100              | ✅           |
-| `postfix`  | SMTP mail relay service | 200              | ✅           |
-
-### Logging Architecture
-
-**Direct stdout logging** without intermediate services:
-
-```
-Postfix   → stdout (via maillog_file = /dev/stdout)
-OpenDKIM  → stdout (via -f -v flags, Syslog = no)
-Supervisord → Container stdout/stderr
+```yaml
+services:
+  - type: LoadBalancer
+    externalTrafficPolicy: "Local" # Preserves real IP
+    proxyProtocol: true # Or use PROXY protocol
 ```
 
-### Building Custom Image
+3. **Enable network policy:**
+
+```yaml
+networkPolicy:
+  enabled: true
+  allowedCidrs:
+    - "10.42.0.0/16"
+```
+
+**Test for open relay:**
 
 ```bash
-# Build the container
-cd mail-relay-chart
-docker build -t ghcr.io/your-username/mail-relay-chart:latest ./docker/
+# From EXTERNAL network
+telnet <loadbalancer-ip> 25
+EHLO test
+MAIL FROM:<attacker@evil.com>
+RCPT TO:<victim@gmail.com>
 
-# Push to registry
-docker push ghcr.io/your-username/mail-relay-chart:latest
-
-# Update values.yaml
-image:
-  repository: ghcr.io/your-username/mail-relay-chart
-  tag: latest
+# Expected: 550 Relay access denied
+# BAD: 250 OK (you're an open relay!)
 ```
 
-## 🌐 DNS Configuration
+### Container Security
 
-### DNS Provider Options
+- Runs as non-root (uid 1000)
+- Read-only root filesystem
+- No privileged mode
+- Security context enforced
 
-The chart supports two DNS management modes:
+---
 
-| Provider       | Description                                          | Best For                       |
-| -------------- | ---------------------------------------------------- | ------------------------------ |
-| `external-dns` | Creates DNSEndpoint CRDs for external-dns controller | Existing external-dns setup    |
-| `cloudflare`   | Direct Cloudflare API integration                    | Reliable TXT record management |
+## Operations
 
-> **Why Cloudflare native?** external-dns has known issues with updating TXT records (DKIM, SPF, DMARC). The native Cloudflare provider ensures reliable record creation and updates.
-
-### Cloudflare DNS (Recommended for Cloudflare Users)
-
-#### 1. Create Cloudflare API Token
-
-1. Go to [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens)
-2. Create a token with these permissions:
-   - **Zone:DNS:Edit** - for all zones you want to manage
-   - **Zone:Zone:Read** - to list zones
-
-#### 2. Configure the Chart
-
-```yaml
-dns:
-  enabled: true
-  provider: cloudflare
-
-  cloudflare:
-    # Option A: Inline token (not recommended for production)
-    apiToken: "your-cloudflare-api-token"
-
-    # Option B: Use existing Kubernetes secret (recommended)
-    existingSecret: "my-cloudflare-secret"
-    # Secret must have key: api-token
-
-    # Optional: Explicit zone IDs (auto-detected if not set)
-    zoneIds:
-      example.com: "abc123zoneid..."
-
-    # Enable Cloudflare proxy for A records (orange cloud)
-    proxied: false
-
-  # Records to create
-  records:
-    a: true # A record for mail hostname
-    mx: true # MX record pointing to mail hostname
-    spf: true # SPF TXT record with server IPs
-    dkim: true # DKIM TXT record from generated keys
-    dmarc: true # DMARC TXT record
-
-  # SPF/DMARC policies
-  spfPolicy: "~all"
-  dmarcPolicy: none
-```
-
-#### 3. Create Secret for API Token
+### View DKIM Keys
 
 ```bash
-kubectl create secret generic my-cloudflare-secret \
-  --namespace mail \
-  --from-literal=api-token="your-cloudflare-api-token"
+# List DKIM secrets
+kubectl get secrets -n mail -l app.kubernetes.io/component=dkim
+
+# Get public key for DNS
+kubectl get secret -n mail mail-relay-dkim-example-com \
+  -o jsonpath='{.data.dns\.record}' | base64 -d
 ```
 
-#### DNS Records Created
-
-With `mail.hostname: mail.example.com` and domain `example.com`:
-
-| Record Type | Name                         | Value                                    |
-| ----------- | ---------------------------- | ---------------------------------------- |
-| A           | mail.example.com             | <detected-ip>                            |
-| MX          | example.com                  | 10 mail.example.com                      |
-| TXT         | example.com                  | v=spf1 ip4:<ip> ~all                     |
-| TXT         | mail.\_domainkey.example.com | v=DKIM1; k=rsa; p=<public-key>           |
-| TXT         | \_dmarc.example.com          | v=DMARC1; p=none; rua=mailto:postmaster@ |
-
-### external-dns Integration
-
-If you have external-dns already deployed:
-
-```yaml
-dns:
-  enabled: true
-  provider: external-dns
-
-  externalDns:
-    enabled: true
-```
-
-This creates `DNSEndpoint` CRDs that external-dns will process.
-
-> **Note**: external-dns may have issues updating existing TXT records. Consider the native Cloudflare provider if you experience DNS update problems.
-
-### Automatic DNS Management
-
-With external-dns enabled, the following records are created automatically:
-
-```yaml
-externalDns:
-  enabled: true
-  provider: cloudflare # or route53, google, etc.
-  autoManageDnsRecords: true
-
-  # Owner ID must match your external-dns installation
-  # Check your external-dns deployment for the --txt-owner-id parameter
-  ownerId: "k8s-cluster-external-dns" # Default value
-  # For multiple clusters, use unique IDs like:
-  # ownerId: "prod-cluster-external-dns"
-  # ownerId: "staging-cluster-external-dns"
-```
-
-> **Important**: The `ownerId` must match the `--txt-owner-id` parameter in your external-dns deployment.
-> Check with: `kubectl describe deployment external-dns -n kube-system | grep txt-owner-id`
-
-### IP Detection Configuration
-
-When using automatic DNS management, you can control how external IPs are determined:
-
-#### Option 1: Automatic IP Detection (Default)
-
-```yaml
-externalDns:
-  enabled: true
-  autoManageDnsRecords: true
-
-dnsHelper:
-  enabled: true
-  ipDetection: true # Default - auto-detect external IP
-  # No externalIps specified - will detect automatically
-```
-
-#### Option 2: Manual IP Configuration
-
-```yaml
-externalDns:
-  enabled: true
-  autoManageDnsRecords: true
-
-dnsHelper:
-  enabled: true
-  ipDetection: false # Disable auto-detection
-  externalIps: # Use these IPs instead
-    - "203.0.113.1"
-    - "203.0.113.2"
-```
-
-#### Option 3: Hybrid (Manual IPs take precedence)
-
-```yaml
-externalDns:
-  enabled: true
-  autoManageDnsRecords: true
-
-dnsHelper:
-  enabled: true
-  ipDetection: true # Enabled but will be ignored
-  externalIps: # These take precedence
-    - "203.0.113.1"
-```
-
-#### Behavior Summary:
-
-| ipDetection | externalIps | Behavior                                            |
-| ----------- | ----------- | --------------------------------------------------- |
-| true        | []          | Auto-detect IP from external services (every 5 min) |
-| false       | [ips...]    | Use specified IPs (check every 6 hours)             |
-| true        | [ips...]    | Use specified IPs (check every 6 hours)             |
-| false       | []          | ❌ Error - must provide IPs when detection disabled |
-
-#### DNS Record Results:
-
-**Auto-detection mode:**
-
-- A: mail.example.com → <detected-ip>
-- SPF: "v=spf1 ip4:<detected-ip> a:mail.example.com ~all"
-
-**Manual IP mode:**
-
-- A: mail.example.com → 203.0.113.1, 203.0.113.2
-- SPF: "v=spf1 ip4:203.0.113.1 ip4:203.0.113.2 a:mail.example.com ~all"
-
-### Manual DNS Configuration
-
-If not using external-dns, create these DNS records:
-
-```
-# A record pointing to your LoadBalancer IP
-mail.mycompany.com.  300  IN  A     192.168.1.100
-
-# MX record for your domain
-mycompany.com.       300  IN  MX    10 mail.mycompany.com.
-
-# DKIM TXT record (get from pod logs)
-mail._domainkey.mycompany.com.  300  IN  TXT  "v=DKIM1; k=rsa; p=MIGfMA0GCS..."
-```
-
-## 🔧 Operations
-
-### Viewing DKIM Public Keys
+### Test SMTP
 
 ```bash
-# Get DKIM public keys for DNS
-kubectl exec -n mail deployment/my-mail-relay -- find /data/dkim-keys -name "*.txt" -exec cat {} \;
+# Port forward
+kubectl port-forward -n mail svc/mail-relay 2525:25
+
+# Test with swaks
+swaks --to test@gmail.com --from sender@example.com \
+  --server localhost:2525 --port 2525
 ```
 
-### Testing Mail Relay
+### View Queue
 
 ```bash
-# Port forward for testing
-kubectl port-forward -n mail service/my-mail-relay 2525:25
-
-# Test SMTP connection
-telnet localhost 2525
-# > EHLO test.com
-# > MAIL FROM: test@mycompany.com
-# > RCPT TO: recipient@example.com
-# > DATA
-# > Subject: Test Email
-# >
-# > This is a test email.
-# > .
-# > QUIT
+kubectl exec -n mail deployment/mail-relay -- \
+  haraka -c /app -l queue
 ```
 
-### Monitoring and Logs
+### Logs
 
 ```bash
-# View container logs
-kubectl logs -n mail deployment/my-mail-relay -f
+# Main container
+kubectl logs -n mail deployment/mail-relay -c haraka -f
 
-# Check service status
-kubectl get svc,pods -n mail
-
-# View events
-kubectl get events -n mail --sort-by='.firstTimestamp'
+# DNS watcher
+kubectl logs -n mail deployment/mail-relay -c dns-watcher -f
 ```
 
-### Health Checks
-
-The deployment includes TCP health checks:
-
-```yaml
-livenessProbe:
-  tcpSocket:
-    port: smtp
-  initialDelaySeconds: 30
-  periodSeconds: 10
-
-readinessProbe:
-  tcpSocket:
-    port: smtp
-  initialDelaySeconds: 15
-  periodSeconds: 5
-```
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-#### 1. Container Startup Issues
+### Backup Queue
 
 ```bash
-# Check pod status
+POD=$(kubectl get pod -n mail -l app.kubernetes.io/name=mail-relay -o name | head -1)
+kubectl exec -n mail $POD -- tar czf /tmp/queue.tar.gz /data/queue
+kubectl cp mail/${POD#pod/}:/tmp/queue.tar.gz ./queue-backup.tar.gz
+```
+
+---
+
+## Troubleshooting
+
+### Pod Won't Start
+
+```bash
+# Check events
 kubectl describe pod -n mail -l app.kubernetes.io/name=mail-relay
 
-# Check container logs
-kubectl logs -n mail deployment/my-mail-relay --previous
-
-# Check individual service status via supervisord
-kubectl exec -n mail deployment/my-mail-relay -- supervisorctl status
+# Check init containers
+kubectl logs -n mail -l app.kubernetes.io/name=mail-relay -c dkim-init
+kubectl logs -n mail -l app.kubernetes.io/name=mail-relay -c dns-init
 ```
 
-#### 2. Postfix Permission Errors
+### DNS Not Creating
 
 ```bash
-# If permissions are wrong, restart the pod to trigger permission rebuild
-kubectl rollout restart -n mail deployment/my-mail-relay
+# Check DNS init logs
+kubectl logs -n mail -l app.kubernetes.io/name=mail-relay -c dns-init
+
+# Verify Cloudflare token
+kubectl get secret -n mail cloudflare-api-token -o yaml
 ```
 
-#### 3. Service Management
+### Mail Not Delivering
 
 ```bash
-# Restart individual services without restarting container
-kubectl exec -n mail deployment/my-mail-relay -- supervisorctl restart postfix
-kubectl exec -n mail deployment/my-mail-relay -- supervisorctl restart opendkim
-
-# Check service logs
-kubectl exec -n mail deployment/my-mail-relay -- supervisorctl tail postfix
-kubectl exec -n mail deployment/my-mail-relay -- supervisorctl tail opendkim
-```
-
-#### 4. SMTP Connection Problems
-
-```bash
-# Test from within cluster
-kubectl run test-pod --rm -it --image=busybox -- sh
-# > telnet my-mail-relay.mail.svc.cluster.local 25
-```
-
-#### 5. DKIM Key Issues
-
-```bash
-# Check DKIM directory
-kubectl exec -n mail deployment/my-mail-relay -- ls -la /data/dkim-keys/
-
-# Regenerate DKIM keys
-kubectl exec -n mail deployment/my-mail-relay -- rm -rf /data/dkim-keys/*
-kubectl rollout restart -n mail deployment/my-mail-relay
-```
-
-#### 4. DNS Resolution Issues
-
-```bash
-# Check external-dns logs
-kubectl logs -n kube-system deployment/external-dns
+# Check outbound logs
+kubectl logs -n mail deployment/mail-relay -c haraka | grep -i "failed\|error\|bounce"
 
 # Test DNS resolution
-kubectl exec -n mail deployment/my-mail-relay -- nslookup gmail.com
+kubectl exec -n mail deployment/mail-relay -- dig +short MX gmail.com
 ```
 
-### IPv6 Disabled Architecture
-
-This chart uses IPv4-only configuration to avoid container DNS resolution issues:
+### Rate Limited by Gmail
 
 ```bash
-# Verify IPv4-only mode
-kubectl exec -n mail deployment/my-mail-relay -- postconf inet_protocols
-# Should output: inet_protocols = ipv4
+# Check adaptive rate metrics
+kubectl exec -n mail deployment/mail-relay -- \
+  curl -s localhost:8093/metrics | grep adaptive_rate
 ```
 
-## 🔄 Backup and Recovery
+Enable more aggressive backoff:
 
-### Backup Persistent Data
-
-```bash
-# Create backup
-kubectl exec -n mail deployment/my-mail-relay -- tar -czf /tmp/mail-backup.tar.gz /data
-
-# Copy backup locally
-POD_NAME=$(kubectl get pods -n mail -l app.kubernetes.io/name=mail-relay -o jsonpath='{.items[0].metadata.name}')
-kubectl cp mail/$POD_NAME:/tmp/mail-backup.tar.gz ./mail-backup-$(date +%Y%m%d).tar.gz
+```yaml
+adaptiveRate:
+  domains:
+    gmail.com:
+      backoffMultiplier: 2.5
+      successThreshold: 15
 ```
 
-### Restore from Backup
+---
 
-```bash
-# Copy backup to pod
-kubectl cp ./mail-backup.tar.gz mail/$POD_NAME:/tmp/mail-backup.tar.gz
-
-# Restore data
-kubectl exec -n mail deployment/my-mail-relay -- tar -xzf /tmp/mail-backup.tar.gz -C /
-kubectl rollout restart -n mail deployment/my-mail-relay
-```
-
-## 🧹 Cleanup
-
-### Uninstall Release
-
-```bash
-# Remove Helm release
-helm uninstall my-mail-relay -n mail
-
-# Remove persistent data (optional)
-kubectl delete pvc -n mail my-mail-relay-data
-
-# Remove namespace (optional)
-kubectl delete namespace mail
-```
-
-## 🛠️ Development
+## Development
 
 ### Project Structure
 
 ```
 mail-relay-chart/
-├── README.md                    # This file
-├── LICENSE                     # MIT License
-├── values.byc.yaml             # Example values file
-├── chart/                      # Helm chart
+├── chart/                    # Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/
-│       ├── deployment.yaml     # Simplified with env vars
-│       ├── configmap-*.yaml
-│       └── ...
-└── docker/                     # Container build context
-    ├── Dockerfile              # Debian 13 based image
-    ├── supervisord.conf        # Process management config
-    └── entrypoint.sh           # Environment-driven setup script
+├── plugins/                  # Custom Haraka plugins
+│   ├── adaptive-rate/        # Dynamic rate limiting
+│   ├── webhook/              # Delivery webhooks
+│   ├── sender-validation/    # From address whitelist/blacklist
+│   ├── inbound-handler/      # Bounce/FBL processing
+│   ├── outbound-headers/     # VERP Return-Path
+│   ├── rcpt-to-inbound/      # Inbound routing
+│   └── dmarc-verify/         # DMARC verification
+├── scripts/                  # DNS management (Python)
+│   ├── dns_manager.py
+│   ├── dns_watcher.py
+│   └── dns/
+├── Dockerfile                # Node.js Alpine + Haraka
+└── README.md
 ```
 
-### Contributing
+### Building Image
 
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
-3. **Make your changes**
-4. **Test locally**: `helm install test ./chart -f values.yaml`
-5. **Submit a pull request**
+```bash
+docker build -t mail-relay:dev .
 
-### Release Process
+# Multi-arch
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/lnking81/mail-relay-chart:dev --push .
+```
 
-1. **Update Chart.yaml version**
-2. **Build and push container**: `docker build -t ghcr.io/lnking81/mail-relay-chart:vX.X.X ./docker/`
-3. **Create GitHub release**
-4. **Update documentation**
+### Local Testing
 
-## 📄 License
+```bash
+# Lint
+helm lint ./chart
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+# Template
+helm template test ./chart -f test-values.yaml
 
-## 🤝 Support
-
-- **Documentation**: [GitHub Repository](https://github.com/lnking81/mail-relay-chart)
-- **Issues**: [GitHub Issues](https://github.com/lnking81/mail-relay-chart/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/lnking81/mail-relay-chart/discussions)
+# Install
+helm install test ./chart -n mail --create-namespace -f test-values.yaml
+```
 
 ---
 
-**Made with ❤️ for Kubernetes mail relay deployments**
+## License
+
+MIT License - see [LICENSE](LICENSE)
+
+## Links
+
+- [GitHub Repository](https://github.com/lnking81/mail-relay-chart)
+- [Haraka Documentation](https://haraka.github.io/)
+- [Issues](https://github.com/lnking81/mail-relay-chart/issues)
