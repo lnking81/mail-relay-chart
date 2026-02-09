@@ -4,16 +4,17 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
 
 ## Features
 
-| Category           | Features                                                                           |
-| ------------------ | ---------------------------------------------------------------------------------- |
-| **Mail Server**    | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support |
-| **Security**       | TLS/STARTTLS, DKIM signing (auto-generated keys), sender validation, SMTP AUTH     |
-| **DNS**            | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns             |
-| **Delivery**       | Static + adaptive rate limiting, per-domain throttling, IP warmup support          |
-| **Inbound**        | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses     |
-| **Webhooks**       | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints    |
-| **Monitoring**     | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                  |
-| **Infrastructure** | Kubernetes-native, non-root container, Network Policies, PVC for queue             |
+| Category           | Features                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| **Mail Server**    | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support  |
+| **Security**       | TLS/STARTTLS, DKIM signing (auto-generated keys), sender validation, SMTP AUTH      |
+| **DNS**            | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns              |
+| **Delivery**       | Static + adaptive rate limiting, per-domain throttling, IP warmup support           |
+| **Inbound**        | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses      |
+| **DMARC Analytics**| Aggregate report parsing, deliverability metrics, spoofing detection, policy tuning |
+| **Webhooks**       | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints     |
+| **Monitoring**     | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                   |
+| **Infrastructure** | Kubernetes-native, non-root container, Network Policies, PVC for queue              |
 
 ---
 
@@ -33,6 +34,7 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
   - [Rate Limiting](#rate-limiting)
   - [Adaptive Rate Limiting](#adaptive-rate-limiting)
   - [Inbound Mail (Bounces/FBL)](#inbound-mail-bouncesfbl)
+  - [DMARC Aggregate Reports](#dmarc-aggregate-reports)
   - [Webhooks](#webhooks)
   - [Monitoring](#monitoring)
 - [Security](#security)
@@ -530,6 +532,136 @@ inbound:
 4. Webhook: { event: "bounce_received", message_id: "order-123" }
 ```
 
+### DMARC Aggregate Reports
+
+Receive and parse DMARC aggregate reports from major email providers (Google, Microsoft, Yahoo, etc.) to gain visibility into email authentication and deliverability.
+
+#### Why You Need This
+
+DMARC reports are **essential for production email operations**:
+
+| Use Case | Benefit |
+|----------|---------|
+| **Deliverability Monitoring** | Track what percentage of your emails pass SPF/DKIM/DMARC checks at recipient servers |
+| **Spoofing Detection** | Identify unauthorized servers sending email claiming to be from your domain |
+| **Configuration Debugging** | Discover SPF/DKIM misconfigurations before they affect deliverability |
+| **Policy Migration** | Safely transition from `p=none` to `p=quarantine` or `p=reject` with data-driven decisions |
+| **Source Discovery** | Find all services (SaaS apps, marketing platforms, etc.) sending on your domain's behalf |
+| **Anomaly Alerting** | Detect sudden spikes in authentication failures that may indicate attacks or misconfigurations |
+
+**Example insights from DMARC metrics:**
+
+- "98% of emails from our relay pass DMARC, but 15% from `marketing.example.com` fail SPF" → Fix SPF record
+- "Unknown IP 203.0.113.50 sent 10,000 emails as `@yourdomain.com` yesterday" → Spoofing attack detected
+- "DKIM pass rate dropped from 99% to 85% after deployment" → Key rotation issue
+
+#### Configuration
+
+```yaml
+inbound:
+  enabled: true
+
+  # Add 'dmarc' to recipients to receive DMARC reports
+  recipients:
+    - postmaster
+    - dmarc       # Receives reports at dmarc@yourdomain.com
+    - abuse
+    - "bounce+"
+
+  dmarcReports:
+    enabled: true
+
+    # Prometheus metrics endpoint (separate from main metrics)
+    metricsPort: 8094
+
+    # Store raw reports for analysis/debugging
+    storeReports: true
+    storePath: /data/dmarc-reports
+    maxReportAge: "30d"
+
+    # Forward parsed reports to external systems
+    webhook:
+      enabled: false
+      url: "https://api.example.com/dmarc"
+      headers:
+        Authorization: "Bearer token"
+```
+
+When `dmarcReports.enabled: true`, the chart automatically sets the DMARC `rua=` tag to `mailto:dmarc@yourdomain.com`.
+
+#### Prometheus Metrics
+
+Available at `http://pod-ip:8094/metrics`:
+
+```promql
+# Report-level metrics
+haraka_dmarc_reports_total{domain="example.com",reporter="google.com"}
+haraka_dmarc_reports_time_range_seconds{domain="example.com"}
+
+# Message-level (auth results from all reporters)
+haraka_dmarc_messages_total{domain="example.com",dkim="pass",spf="fail",disposition="none"}
+haraka_dmarc_messages_by_source_total{domain="example.com",source_ip="203.0.113.1",country="US"}
+
+# Processing stats
+haraka_dmarc_reports_processing_errors_total{domain="example.com",error="parse_error"}
+haraka_dmarc_reports_last_received_timestamp{domain="example.com"}
+```
+
+#### Example Prometheus Alerts
+
+```yaml
+groups:
+  - name: dmarc
+    rules:
+      # Alert when DMARC pass rate drops
+      - alert: DMARCPassRateLow
+        expr: |
+          sum(rate(haraka_dmarc_messages_total{dkim="pass",spf=~"pass|softfail"}[1h]))
+          / sum(rate(haraka_dmarc_messages_total[1h])) < 0.95
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "DMARC pass rate below 95%"
+
+      # Alert on potential spoofing (unknown sources with high fail rate)
+      - alert: DMARCPotentialSpoofing
+        expr: |
+          sum by (source_ip) (
+            rate(haraka_dmarc_messages_total{dkim="fail",spf="fail"}[6h])
+          ) > 100
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Potential spoofing from {{ $labels.source_ip }}"
+
+      # Alert when no reports received (may indicate DNS issue)
+      - alert: DMARCNoReportsReceived
+        expr: |
+          time() - haraka_dmarc_reports_last_received_timestamp > 86400 * 3
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No DMARC reports for 3+ days"
+```
+
+#### Grafana Dashboard
+
+Query examples for Grafana:
+
+```promql
+# Pass rate by authentication method
+sum(rate(haraka_dmarc_messages_total{dkim="pass"}[1d])) / sum(rate(haraka_dmarc_messages_total[1d]))
+
+# Top unauthorized senders (potential spoofers)
+topk(10, sum by (source_ip) (increase(haraka_dmarc_messages_total{disposition=~"quarantine|reject"}[7d])))
+
+# Reports by provider
+sum by (reporter) (increase(haraka_dmarc_reports_total[7d]))
+```
+
 ### Webhooks
 
 Send delivery events to HTTP endpoints:
@@ -779,12 +911,13 @@ mail-relay-chart/
 │   └── templates/
 ├── plugins/                  # Custom Haraka plugins
 │   ├── adaptive-rate/        # Dynamic rate limiting
-│   ├── webhook/              # Delivery webhooks
-│   ├── sender-validation/    # From address whitelist/blacklist
+│   ├── dmarc-reports/        # DMARC aggregate report parser
+│   ├── dmarc-verify/         # DMARC verification
 │   ├── inbound-handler/      # Bounce/FBL processing
 │   ├── outbound-headers/     # VERP Return-Path
 │   ├── rcpt-to-inbound/      # Inbound routing
-│   └── dmarc-verify/         # DMARC verification
+│   ├── sender-validation/    # From address whitelist/blacklist
+│   └── webhook/              # Delivery webhooks
 ├── scripts/                  # DNS management (Python)
 │   ├── dns_manager.py
 │   ├── dns_watcher.py

@@ -49,6 +49,7 @@ class MailConfig:
     # SPF/DMARC policies
     spf_policy: str = "~all"
     dmarc_policy: str = "none"
+    dmarc_pct: str = ""  # Empty = omit (RFC default 100)
     dmarc_rua: str = ""
 
     # TTL
@@ -78,6 +79,7 @@ class MailConfig:
             create_dmarc=os.environ.get("DNS_CREATE_DMARC", "true").lower() == "true",
             spf_policy=os.environ.get("DNS_SPF_POLICY", "~all"),
             dmarc_policy=os.environ.get("DNS_DMARC_POLICY", "none"),
+            dmarc_pct=os.environ.get("DNS_DMARC_PCT", ""),
             dmarc_rua=os.environ.get("DNS_DMARC_RUA", ""),
             ttl=int(os.environ.get("DNS_TTL", "300")),
         )
@@ -133,9 +135,23 @@ class DNSManager:
         return f"v=spf1 {ip_parts} {self.mail_config.spf_policy}"
 
     def build_dmarc_record(self, domain: str) -> str:
-        """Build DMARC record content"""
+        """Build DMARC record content
+
+        RUA (aggregate report address):
+        - If dmarc_rua is set explicitly, use it for all domains
+        - Otherwise default to postmaster@{domain}
+
+        PCT (policy percentage):
+        - If dmarc_pct is set, include pct=N in record
+        - Otherwise omit (RFC default is 100)
+
+        Note: When dmarcReports.enabled=true in Helm, it auto-sets:
+        - dmarc_rua to dmarc@{domain} to receive aggregate reports
+        - dmarc_pct to 100 for full visibility
+        """
         rua = self.mail_config.dmarc_rua or f"postmaster@{domain}"
-        return f"v=DMARC1; p={self.mail_config.dmarc_policy}; rua=mailto:{rua}"
+        pct = f"; pct={self.mail_config.dmarc_pct}" if self.mail_config.dmarc_pct else ""
+        return f"v=DMARC1; p={self.mail_config.dmarc_policy}{pct}; rua=mailto:{rua}"
 
     def init_or_update(self, wait_for_lb: int = 300) -> bool:
         """

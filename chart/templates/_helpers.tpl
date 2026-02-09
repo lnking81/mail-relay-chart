@@ -95,8 +95,33 @@ Usage: {{ include "mail-relay.dmarcRecord" (list $domain $.Values) }}
 {{- define "mail-relay.dmarcRecord" -}}
 {{- $domain := index . 0 -}}
 {{- $values := index . 1 -}}
-{{- $rua := $values.dns.dmarcRua | default (printf "postmaster@%s" $domain.name) -}}
-v=DMARC1; p={{ $values.dns.dmarcPolicy }}; rua=mailto:{{ $rua }}
+{{/*
+  RUA priority:
+  1. Explicit dns.dmarcRua setting
+  2. dmarc@domain if inbound.dmarcReports.enabled (to receive aggregate reports)
+  3. postmaster@domain as default
+*/}}
+{{- $rua := "" -}}
+{{- if $values.dns.dmarcRua -}}
+  {{- $rua = $values.dns.dmarcRua -}}
+{{- else if $values.inbound.dmarcReports.enabled -}}
+  {{- $rua = printf "dmarc@%s" $domain.name -}}
+{{- else -}}
+  {{- $rua = printf "postmaster@%s" $domain.name -}}
+{{- end -}}
+{{/*
+  PCT handling:
+  - If dmarcPct is explicitly set, use it
+  - If dmarcReports.enabled and dmarcPct is empty, use 100 for full visibility
+  - Otherwise, omit pct (RFC default is 100)
+*/}}
+{{- $pct := "" -}}
+{{- if $values.dns.dmarcPct -}}
+  {{- $pct = printf "; pct=%s" (toString $values.dns.dmarcPct) -}}
+{{- else if $values.inbound.dmarcReports.enabled -}}
+  {{- $pct = "; pct=100" -}}
+{{- end -}}
+v=DMARC1; p={{ $values.dns.dmarcPolicy }}{{ $pct }}; rua=mailto:{{ $rua }}
 {{- end }}
 
 {{/*
@@ -170,9 +195,31 @@ Used by dns-init and dns-watcher containers
   value: {{ .Values.dns.spfPolicy | quote }}
 - name: DNS_DMARC_POLICY
   value: {{ .Values.dns.dmarcPolicy | quote }}
+{{/*
+  Pass DMARC PCT to DNS manager:
+  - Explicit value if set
+  - 100 if dmarcReports enabled (full visibility)
+  - Empty = omit from record (RFC default is 100)
+*/}}
+{{- if .Values.dns.dmarcPct }}
+- name: DNS_DMARC_PCT
+  value: {{ .Values.dns.dmarcPct | quote }}
+{{- else if .Values.inbound.dmarcReports.enabled }}
+- name: DNS_DMARC_PCT
+  value: "100"
+{{- end }}
+{{/*
+  Pass DMARC RUA to DNS manager:
+  - Explicit value if set
+  - dmarc@<first-domain> if dmarcReports enabled
+  - Empty = use default postmaster@domain
+*/}}
 {{- if .Values.dns.dmarcRua }}
 - name: DNS_DMARC_RUA
   value: {{ .Values.dns.dmarcRua | quote }}
+{{- else if .Values.inbound.dmarcReports.enabled }}
+- name: DNS_DMARC_RUA
+  value: dmarc@{{ (index .Values.mail.domains 0).name }}
 {{- end }}
 - name: DETECT_OUTBOUND_IP
   value: {{ .Values.dns.ip.detectOutbound | quote }}

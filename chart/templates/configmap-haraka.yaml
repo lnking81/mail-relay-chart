@@ -587,6 +587,28 @@ data:
     [webhook]
     ; Uses webhook.ini endpoints if not specified
     timeout={{ .Values.webhooks.timeout | default 5000 }}
+
+  {{- if .Values.inbound.dmarcReports.enabled }}
+  # === DMARC Aggregate Reports ===
+  # Parses DMARC XML reports and exports metrics to Prometheus
+  dmarc_reports.ini: |
+    [main]
+    enabled=true
+    ; Port for DMARC-specific Prometheus metrics endpoint
+    metrics_port={{ .Values.inbound.dmarcReports.metricsPort | default 8094 }}
+    ; Store parsed reports to disk (JSON format)
+    store_reports={{ .Values.inbound.dmarcReports.storeReports | default false }}
+    store_path={{ .Values.inbound.dmarcReports.storePath | default "/data/dmarc-reports" }}
+    ; Maximum report age to process (days, 0=unlimited)
+    max_report_age={{ .Values.inbound.dmarcReports.maxReportAge | default 90 }}
+
+    {{- if .Values.inbound.dmarcReports.webhook.enabled }}
+    [webhook]
+    enabled=true
+    url={{ .Values.inbound.dmarcReports.webhook.url }}
+    timeout={{ .Values.inbound.dmarcReports.webhook.timeout | default 5000 }}
+    {{- end }}
+  {{- end }}
   {{- end }}
 
   # === Message Limits ===
@@ -681,6 +703,11 @@ data:
     inbound-handler
     {{- if .Values.inbound.bounce.enabled }}
     bounce
+    {{- end }}
+
+    {{- if .Values.inbound.dmarcReports.enabled }}
+    # DMARC aggregate reports parser (exports metrics to Prometheus)
+    dmarc-reports
     {{- end }}
     {{- end }}
 

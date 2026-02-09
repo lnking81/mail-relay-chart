@@ -86,7 +86,7 @@ exports.load_config = function () {
     }
 
     // Load additional recipients
-    config.recipients = new Set(['postmaster', 'abuse', 'fbl']); // Always include RFC-required
+    config.recipients = new Set(['postmaster', 'abuse', 'fbl', 'dmarc']); // Always include RFC-required + dmarc
     if (cfg.recipients) {
         for (const rcpt of Object.keys(cfg.recipients)) {
             if (cfg.recipients[rcpt]) {
@@ -187,6 +187,17 @@ exports.check_recipient = function (next, connection, params) {
         }
 
         logger(`Accepting FBL: ${rcpt_address}`);
+        return next(OK);
+    }
+
+    // Check for DMARC aggregate reports address
+    if (rcpt_user === 'dmarc' || rcpt_user === 'dmarc-reports' || rcpt_user === '_dmarc') {
+        if (transaction) {
+            transaction.notes.inbound_type = 'dmarc';
+            transaction.notes.inbound_recipient = rcpt_address;
+        }
+
+        logger(`Accepting DMARC report: ${rcpt_address}`);
         return next(OK);
     }
 

@@ -405,6 +405,11 @@ dns:
   # DMARC policy: none, quarantine, reject
   dmarcPolicy: none
 
+  # DMARC pct: percentage of messages to apply policy (1-100)
+  # When inbound.dmarcReports.enabled=true, defaults to 100 for full visibility
+  # Empty = not added to record (RFC default is 100)
+  dmarcPct: ""
+
   # DMARC aggregate report address (empty = postmaster@domain)
   dmarcRua: ""
 
@@ -718,6 +723,7 @@ inbound:
     - abuse
     - "bounce+" # Accepts bounce+anything@domain (VERP)
     - fbl
+    - dmarc # DMARC aggregate reports (rua=mailto:dmarc@domain)
 
   # Bounce processing settings
   bounce:
@@ -741,6 +747,32 @@ inbound:
     # Maximum age of valid bounces in days
     # Bounces older than this are rejected (protection against replay attacks)
     maxAgeDays: 7
+
+  # === DMARC Aggregate Reports ===
+  # Parse DMARC aggregate reports (RFC 7489) and export statistics to Prometheus
+  # Reports are XML files sent by email providers to the address in DMARC rua= tag
+  # Example DMARC record: v=DMARC1; p=reject; rua=mailto:dmarc@example.com
+  dmarcReports:
+    # Enable DMARC report processing (accepts mail to dmarc@domain)
+    enabled: false
+
+    # Port for DMARC-specific Prometheus metrics endpoint
+    # Provides: haraka_dmarc_reports_total, haraka_dmarc_messages_total, etc.
+    metricsPort: 8094
+
+    # Store parsed reports to disk (JSON format)
+    storeReports: false
+    storePath: /data/dmarc-reports
+
+    # Maximum report age to process (days, 0=unlimited)
+    # Old reports are accepted but not processed (prevents metric pollution)
+    maxReportAge: 90
+
+    # Send webhook for each parsed DMARC report
+    webhook:
+      enabled: false
+      url: ""
+      timeout: 5000
 
 # === Metrics / Monitoring ===
 metrics:

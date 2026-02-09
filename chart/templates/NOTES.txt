@@ -72,6 +72,34 @@ DNS automation enabled but external-dns not configured.
 {{- end }}
 {{- end }}
 
+{{- if .Values.inbound.dmarcReports.enabled }}
+
+=== DMARC Aggregate Reports ===
+DMARC report processing is enabled!
+
+DNS DMARC record will include: rua=mailto:dmarc@{{ (first .Values.mail.domains).name }}
+Email providers will send aggregate reports (XML/ZIP) to this address.
+
+Prometheus metrics (port {{ .Values.inbound.dmarcReports.metricsPort | default 8094 }}):
+  - haraka_dmarc_reports_total{reporter="google.com|microsoft.com|..."}
+  - haraka_dmarc_messages_total{domain, result="pass|fail"}
+  - haraka_dmarc_spf_result{domain, result="pass|fail|none"}
+  - haraka_dmarc_dkim_result{domain, result="pass|fail|none"}
+  - haraka_dmarc_disposition{domain, disposition="none|quarantine|reject"}
+
+{{- if .Values.inbound.dmarcReports.storeReports }}
+Reports stored at: {{ .Values.inbound.dmarcReports.storePath | default "/data/dmarc-reports" }}
+{{- end }}
+
+{{- if and .Values.inbound.dmarcReports.webhook .Values.inbound.dmarcReports.webhook.enabled }}
+Webhook notifications: {{ .Values.inbound.dmarcReports.webhook.url }}
+{{- end }}
+
+View metrics:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "mail-relay.fullname" . }} {{ .Values.inbound.dmarcReports.metricsPort | default 8094 }}:{{ .Values.inbound.dmarcReports.metricsPort | default 8094 }}
+  curl localhost:{{ .Values.inbound.dmarcReports.metricsPort | default 8094 }}/metrics
+{{- end }}
+
 === Testing ===
 Port forward for local testing:
 {{- $firstSvc := first .Values.services }}

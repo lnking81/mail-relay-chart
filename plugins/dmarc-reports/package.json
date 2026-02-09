@@ -1,0 +1,25 @@
+{
+  "name": "haraka-plugin-dmarc-reports",
+  "version": "1.0.0",
+  "description": "DMARC Aggregate Reports parser with Prometheus metrics export",
+  "main": "index.js",
+  "keywords": [
+    "haraka",
+    "plugin",
+    "dmarc",
+    "aggregate-reports",
+    "prometheus",
+    "metrics"
+  ],
+  "author": "mail-relay-chart",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "Haraka": ">=3.0.0"
+  },
+  "optionalDependencies": {
+    "prom-client": ">=14.0.0"
+  }
+}
