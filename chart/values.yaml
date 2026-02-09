@@ -43,17 +43,32 @@ haraka:
 
   # HAProxy PROXY Protocol v1/v2 support
   # Enables preservation of real client IP through load balancers
+  #
+  # NOTE: proxyProtocol is now configured per-service in services[] array.
+  # This section only configures WHICH source IPs trigger PROXY parsing.
   proxyProtocol:
-    # Enable PROXY protocol parsing
-    enabled: false
+    # Auto-detect trusted proxies from LoadBalancer Service status
+    # When enabled, IPs from .status.loadBalancer.ingress[] are automatically
+    # added to trustedProxies at container startup
+    #
+    # Works with: Hetzner Cloud, AWS NLB, GCP, Azure, MetalLB, etc.
+    # Requires: serviceAccount with "get services" permission (auto-configured)
+    #
+    # Example: If LoadBalancer has ingress IPs [142.132.243.70, 10.128.0.5],
+    # both will be trusted for PROXY protocol
+    autoDetect: false
 
     # Trusted proxy sources (IPs or CIDRs)
     # Only connections from these sources will have PROXY headers parsed
-    # Empty = accept from any source (use with caution)
+    # Combined with auto-detected IPs when autoDetect: true
+    #
+    # Should contain your LoadBalancer's backend/node IPs, NOT pod CIDRs!
     # Examples:
-    #   - "10.0.0.0/8"        # Internal network
-    #   - "172.16.0.0/12"     # Docker/Kubernetes networks
+    #   - "10.0.0.0/8"        # If your LB nodes are in this range
     #   - "192.168.1.100"     # Specific load balancer IP
+    #
+    # If empty and services have proxyProtocol: true, accepts from any source
+    # (not recommended - internal connections will fail)
     trustedProxies: []
 
 # === Mail Settings ===
@@ -428,28 +443,54 @@ dns:
     dnsServer: ""
 
 # === Service Configuration ===
-service:
-  # Service type: ClusterIP, NodePort, LoadBalancer
-  type: ClusterIP
-
-  # SMTP port
-  port: 25
-
-  # NodePort settings (when type: NodePort)
-  # If not specified, Kubernetes assigns a random port 30000-32767
-  nodePort: ""
-
-  # LoadBalancer settings (when type: LoadBalancer)
-  loadBalancerIP: "" # Request specific IP (cloud-dependent)
-  loadBalancerSourceRanges: [] # Restrict access by IP
-  loadBalancerClass: "" # LoadBalancer class (e.g., "hcloud" for Hetzner)
-
-  # Cloud-specific annotations
-  annotations: {}
-  # Examples:
-  #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-  #   service.beta.kubernetes.io/azure-load-balancer-internal: "true"
-  #   metallb.universe.tf/loadBalancerIPs: "192.168.1.100"
+# Flexible array of services - create any number with any type
+#
+# Each service can have:
+# - name: Optional suffix (empty = use release name, otherwise: {release}-{name})
+# - type: ClusterIP, NodePort, LoadBalancer
+# - port: Service port (what clients connect to)
+# - targetPort: Container port (Haraka listen port)
+# - proxyProtocol: Whether this port expects PROXY protocol headers
+# - nodePort: For NodePort type
+# - loadBalancerIP, loadBalancerClass, loadBalancerSourceRanges: For LoadBalancer type
+# - annotations: Service-specific annotations
+#
+# IMPORTANT: Each unique targetPort creates a Haraka listener.
+# Ports with proxyProtocol: true will expect PROXY headers.
+# Configure haraka.proxyProtocol.trustedProxies to match LB backend IPs.
+#
+# Example multi-service setup:
+# services:
+#   - name: ""           # Main service: {release}-mail-relay
+#     type: LoadBalancer
+#     port: 25
+#     targetPort: 25
+#     proxyProtocol: true
+#     loadBalancerClass: "hcloud"
+#
+#   - name: internal     # Internal service: {release}-mail-relay-internal
+#     type: ClusterIP
+#     port: 25
+#     targetPort: 2525   # Different port, no PROXY protocol
+#     proxyProtocol: false
+#
+services:
+  - name: "" # Empty = use fullname without suffix
+    type: ClusterIP
+    port: 25
+    targetPort: 25
+    proxyProtocol: false
+    nodePort: "" # For NodePort type
+    loadBalancerIP: "" # For LoadBalancer type
+    loadBalancerClass: "" # For LoadBalancer type (e.g., "hcloud")
+    loadBalancerSourceRanges: [] # For LoadBalancer type
+    # externalTrafficPolicy: Local or Cluster (LoadBalancer/NodePort only)
+    # Use "Local" to preserve source IP with PROXY protocol
+    externalTrafficPolicy: ""
+    annotations: {}
+    # Examples:
+    #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    #   metallb.universe.tf/loadBalancerIPs: "192.168.1.100"
 
 # === Persistence ===
 persistence:

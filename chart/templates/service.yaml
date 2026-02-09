@@ -1,44 +1,62 @@
+{{- range $index, $svc := .Values.services }}
+{{- $svcName := include "mail-relay.fullname" $ }}
+{{- if $svc.name }}
+{{- $svcName = printf "%s-%s" (include "mail-relay.fullname" $) $svc.name }}
+{{- end }}
+{{- if gt $index 0 }}
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "mail-relay.fullname" . }}
+  name: {{ $svcName }}
   labels:
-    {{- include "mail-relay.labels" . | nindent 4 }}
-  {{- with .Values.service.annotations }}
+    {{- include "mail-relay.labels" $ | nindent 4 }}
+    {{- if $svc.name }}
+    mail-relay/service-name: {{ $svc.name | quote }}
+    {{- end }}
+  {{- with $svc.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ .Values.service.type }}
-  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
-  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  type: {{ $svc.type | default "ClusterIP" }}
+  {{- if and (or (eq $svc.type "LoadBalancer") (eq $svc.type "NodePort")) $svc.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ $svc.externalTrafficPolicy }}
   {{- end }}
-  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerClass }}
-  loadBalancerClass: {{ .Values.service.loadBalancerClass }}
+  {{- if and (eq $svc.type "LoadBalancer") $svc.loadBalancerIP }}
+  loadBalancerIP: {{ $svc.loadBalancerIP }}
   {{- end }}
-  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  {{- if and (eq $svc.type "LoadBalancer") $svc.loadBalancerClass }}
+  loadBalancerClass: {{ $svc.loadBalancerClass }}
+  {{- end }}
+  {{- if and (eq $svc.type "LoadBalancer") $svc.loadBalancerSourceRanges }}
   loadBalancerSourceRanges:
-    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+    {{- toYaml $svc.loadBalancerSourceRanges | nindent 4 }}
   {{- end }}
   ports:
-    - port: {{ .Values.service.port }}
-      targetPort: smtp
+    - port: {{ $svc.port | default 25 | int }}
+      targetPort: smtp-{{ $svc.targetPort | default 25 | int }}
       protocol: TCP
       name: smtp
-      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
-      nodePort: {{ .Values.service.nodePort }}
+      {{- if and (eq $svc.type "NodePort") $svc.nodePort }}
+      nodePort: {{ $svc.nodePort }}
       {{- end }}
-    {{- if or .Values.metrics.enabled .Values.dashboard.watch.enabled .Values.dashboard.logReader.enabled }}
-    - port: {{ .Values.dashboard.port }}
+    {{- if or $.Values.metrics.enabled $.Values.dashboard.watch.enabled $.Values.dashboard.logReader.enabled }}
+    {{- /* Only add http port to first service to avoid conflicts */ -}}
+    {{- if eq $index 0 }}
+    - port: {{ $.Values.dashboard.port }}
       targetPort: http
       protocol: TCP
       name: http
     {{- end }}
-    {{- if .Values.adaptiveRate.enabled }}
-    - port: {{ .Values.adaptiveRate.metricsPort }}
+    {{- end }}
+    {{- if and $.Values.adaptiveRate.enabled (eq $index 0) }}
+    - port: {{ $.Values.adaptiveRate.metricsPort }}
       targetPort: rate-metrics
       protocol: TCP
       name: rate-metrics
     {{- end }}
   selector:
-    {{- include "mail-relay.selectorLabels" . | nindent 4 }}
+    {{- include "mail-relay.selectorLabels" $ | nindent 4 }}
+{{- end }}

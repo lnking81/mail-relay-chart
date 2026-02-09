@@ -17,7 +17,17 @@ data:
 
   smtp.ini: |
     [main]
-    listen=[::0]:25
+    {{- /* Generate listen from unique targetPorts in services array */ -}}
+    {{- $ports := dict }}
+    {{- range .Values.services }}
+    {{- $targetPort := .targetPort | default 25 | int }}
+    {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
+    {{- end }}
+    {{- $listenPorts := list }}
+    {{- range $portStr, $port := $ports }}
+    {{- $listenPorts = append $listenPorts (printf "[::0]:%d" ($port | int)) }}
+    {{- end }}
+    listen={{ join "," $listenPorts }}
     nodes=1
     strict_rfc1869=false
 
@@ -33,17 +43,42 @@ data:
     [haproxy]
     ; HAProxy PROXY protocol v1/v2 support
     ; Enables real client IP preservation through load balancers
-    {{- if .Values.haraka.proxyProtocol.enabled }}
-    {{- if .Values.haraka.proxyProtocol.trustedProxies }}
+    ;
+    ; IMPORTANT: PROXY protocol is determined by SOURCE IP, not destination port!
+    ; This chart uses separate ports for PROXY vs non-PROXY connections.
+    ;
+    ; Services configuration:
+    {{- range .Values.services }}
+    {{- $svcName := $.Release.Name }}
+    {{- if .name }}
+    {{- $svcName = printf "%s-%s" $.Release.Name .name }}
+    {{- end }}
+    ; - {{ $svcName }} (port {{ .port | default 25 }}→{{ .targetPort | default 25 }}): proxyProtocol={{ .proxyProtocol | default false }}
+    {{- end }}
+    ;
+    {{- $hasProxyProtocol := false }}
+    {{- range .Values.services }}
+    {{- if .proxyProtocol }}
+    {{- $hasProxyProtocol = true }}
+    {{- end }}
+    {{- end }}
+    {{- if $hasProxyProtocol }}
+    {{- if .Values.haraka.proxyProtocol.autoDetect }}
+    ; Auto-detect mode: IPs will be populated from LoadBalancer status at runtime
+    __AUTO_DETECT_PROXIES__
+    {{- else if .Values.haraka.proxyProtocol.trustedProxies }}
+    ; Connections from these IPs will expect PROXY protocol header
     {{- range .Values.haraka.proxyProtocol.trustedProxies }}
     hosts[]={{ . }}
     {{- end }}
     {{- else }}
-    ; WARNING: Accepting PROXY protocol from any source
+    ; WARNING: No trustedProxies configured but services have proxyProtocol: true
+    ; Configure haraka.proxyProtocol.trustedProxies with your LB backend IPs
+    ; or enable haraka.proxyProtocol.autoDetect to auto-discover.
     hosts[]=0.0.0.0/0
     {{- end }}
     {{- else }}
-    ; PROXY protocol disabled
+    ; PROXY protocol disabled (no services with proxyProtocol: true)
     hosts[] =
     {{- end }}
 

@@ -20,8 +20,16 @@ spec:
             cidr: {{ . }}
       {{- end }}
       ports:
+        {{- /* Collect unique targetPorts from services */ -}}
+        {{- $ports := dict }}
+        {{- range .Values.services }}
+        {{- $targetPort := .targetPort | default 25 | int }}
+        {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
+        {{- end }}
+        {{- range $portStr, $port := $ports }}
         - protocol: TCP
-          port: 25
+          port: {{ $port }}
+        {{- end }}
     {{- end }}
 
     # Allow from same namespace (for health checks, etc.)
@@ -30,8 +38,16 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Release.Namespace }}
       ports:
+        {{- /* Collect unique targetPorts from services */ -}}
+        {{- $ports := dict }}
+        {{- range .Values.services }}
+        {{- $targetPort := .targetPort | default 25 | int }}
+        {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
+        {{- end }}
+        {{- range $portStr, $port := $ports }}
         - protocol: TCP
-          port: 25
+          port: {{ $port }}
+        {{- end }}
 
     {{- if .Values.metrics.enabled }}
     # Allow metrics scraping from monitoring namespace

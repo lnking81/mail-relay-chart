@@ -107,9 +107,17 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/bin/sh", "/scripts/entrypoint.sh"]
           ports:
-            - name: smtp
-              containerPort: 25
+            {{- /* Generate unique container ports from services array */ -}}
+            {{- $ports := dict }}
+            {{- range .Values.services }}
+            {{- $targetPort := .targetPort | default 25 | int }}
+            {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
+            {{- end }}
+            {{- range $portStr, $port := $ports }}
+            - name: smtp-{{ $port }}
+              containerPort: {{ $port }}
               protocol: TCP
+            {{- end }}
             {{- if or .Values.metrics.enabled .Values.dashboard.watch.enabled .Values.dashboard.logReader.enabled }}
             - name: http
               containerPort: {{ .Values.dashboard.port }}
@@ -126,7 +134,8 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - "test ! -f /shared/kill-pod && nc -z localhost 25"
+                {{- $firstPort := (first .Values.services).targetPort | default 25 | int }}
+                - "test ! -f /shared/kill-pod && nc -z localhost {{ $firstPort }}"
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
@@ -134,7 +143,8 @@ spec:
 
           readinessProbe:
             tcpSocket:
-              port: smtp
+              {{- $firstPort := (first .Values.services).targetPort | default 25 | int }}
+              port: smtp-{{ $firstPort }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
@@ -143,6 +153,36 @@ spec:
           env:
             - name: HARAKA_HOSTNAME
               value: {{ .Values.mail.hostname | quote }}
+            {{- if .Values.haraka.proxyProtocol.autoDetect }}
+            - name: PROXY_PROTOCOL_AUTO_DETECT
+              value: "true"
+            {{- /* Find first LoadBalancer service for IP detection */ -}}
+            {{- $lbService := "" }}
+            {{- range $index, $svc := .Values.services }}
+            {{- if and (eq .type "LoadBalancer") (not $lbService) }}
+            {{- $lbService = $svc }}
+            {{- end }}
+            {{- end }}
+            {{- if $lbService }}
+            {{- $svcName := include "mail-relay.fullname" $ }}
+            {{- if $lbService.name }}
+            {{- $svcName = printf "%s-%s" (include "mail-relay.fullname" $) $lbService.name }}
+            {{- end }}
+            - name: SERVICE_NAME
+              value: {{ $svcName | quote }}
+            {{- else }}
+            - name: SERVICE_NAME
+              value: {{ include "mail-relay.fullname" . | quote }}
+            {{- end }}
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- end }}
+            {{- if .Values.haraka.proxyProtocol.trustedProxies }}
+            - name: STATIC_TRUSTED_PROXIES
+              value: {{ .Values.haraka.proxyProtocol.trustedProxies | join "," | quote }}
+            {{- end }}
             {{- if .Values.redis.enabled }}
             {{- if .Values.redis.existingSecret }}
             - name: REDIS_PASSWORD

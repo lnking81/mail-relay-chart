@@ -20,6 +20,12 @@ data:
     cp -rL /app/config-template/* /app/config/
     ls -la /app/config/
 
+    # Auto-detect trusted proxies from LoadBalancer service status
+    if [ "${PROXY_PROTOCOL_AUTO_DETECT}" = "true" ]; then
+      echo "Running proxy auto-configuration..."
+      python3 /app/proxy_config.py --config-file /app/config/connection.ini
+    fi
+
     # Ensure queue directory exists
     mkdir -p {{ .Values.haraka.queueDir }}
 

@@ -7,30 +7,28 @@ Your mail relay has been deployed successfully!
 
 Hostname: {{ .Values.mail.hostname }}
 Domains:  {{ range .Values.mail.domains }}{{ .name }} {{ end }}
-Service:  {{ .Values.service.type }}
 
-{{- if eq .Values.service.type "LoadBalancer" }}
+=== Services ===
+{{- range $index, $svc := .Values.services }}
+{{- $svcName := include "mail-relay.fullname" $ }}
+{{- if $svc.name }}
+{{- $svcName = printf "%s-%s" (include "mail-relay.fullname" $) $svc.name }}
+{{- end }}
 
-=== LoadBalancer Service ===
-Get the external IP:
-  kubectl get svc {{ include "mail-relay.fullname" . }} -n {{ .Release.Namespace }} \
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-
-Wait for IP assignment:
-  kubectl get svc {{ include "mail-relay.fullname" . }} -n {{ .Release.Namespace }} -w
-{{- else if eq .Values.service.type "NodePort" }}
-
-=== NodePort Service ===
-Get the NodePort:
-  kubectl get svc {{ include "mail-relay.fullname" . }} -n {{ .Release.Namespace }} \
-    -o jsonpath='{.spec.ports[0].nodePort}'
-
-Access via: <NODE_IP>:<NODE_PORT>
-{{- else }}
-
-=== ClusterIP Service ===
-Internal only: {{ include "mail-relay.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
-For external access, consider using LoadBalancer or NodePort service type.
+{{ add $index 1 }}. {{ $svcName }} ({{ $svc.type | default "ClusterIP" }})
+   Port: {{ $svc.port | default 25 }} → {{ $svc.targetPort | default 25 }}
+   {{- if $svc.proxyProtocol }}
+   PROXY Protocol: enabled (expects PROXY header from trusted sources)
+   {{- end }}
+   {{- if eq ($svc.type | default "ClusterIP") "LoadBalancer" }}
+   Get external IP:
+     kubectl get svc {{ $svcName }} -n {{ $.Release.Namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   {{- else if eq ($svc.type | default "ClusterIP") "ClusterIP" }}
+   Cluster DNS: {{ $svcName }}.{{ $.Release.Namespace }}.svc.cluster.local:{{ $svc.port | default 25 }}
+   {{- else if eq ($svc.type | default "ClusterIP") "NodePort" }}
+   Get NodePort:
+     kubectl get svc {{ $svcName }} -n {{ $.Release.Namespace }} -o jsonpath='{.spec.ports[0].nodePort}'
+   {{- end }}
 {{- end }}
 
 {{- if .Values.dkim.enabled }}
@@ -76,7 +74,8 @@ DNS automation enabled but external-dns not configured.
 
 === Testing ===
 Port forward for local testing:
-  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "mail-relay.fullname" . }} 2525:{{ .Values.service.port }}
+{{- $firstSvc := first .Values.services }}
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "mail-relay.fullname" . }} 2525:{{ $firstSvc.port | default 25 }}
 
 Send test email (requires swaks):
   swaks --to recipient@example.com \

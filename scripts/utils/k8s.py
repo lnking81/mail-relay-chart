@@ -81,39 +81,60 @@ class KubernetesClient:
         return output if success else None
 
     def get_loadbalancer_ip(self) -> Optional[str]:
-        """Get LoadBalancer external IP"""
-        # Try IP first
-        success, ip = self._kubectl(
+        """Get LoadBalancer external IP (first one)"""
+        ips = self.get_loadbalancer_ips()
+        return ips[0] if ips else None
+
+    def get_loadbalancer_ips(self) -> list[str]:
+        """
+        Get all LoadBalancer IPs from service status.
+
+        Returns all IPs from status.loadBalancer.ingress[*].ip
+        This includes both external IP and internal/node IPs that
+        some cloud providers expose (e.g., Hetzner with ipMode: Proxy).
+        """
+        ips = []
+
+        # Get all IPs from ingress array
+        success, output = self._kubectl(
             "get",
             "svc",
             self.config.service_name,
             "-o",
-            "jsonpath={.status.loadBalancer.ingress[0].ip}",
+            'jsonpath={range .status.loadBalancer.ingress[*]}{.ip}{"\\n"}{end}',
         )
 
-        if success and ip and ip != "null":
-            return ip
+        if success and output:
+            for line in output.strip().split("\n"):
+                ip = line.strip()
+                if ip and ip != "null" and ip not in ips:
+                    ips.append(ip)
 
-        # Try hostname (AWS NLB)
-        success, hostname = self._kubectl(
+        # Also try hostnames and resolve them (AWS NLB)
+        success, output = self._kubectl(
             "get",
             "svc",
             self.config.service_name,
             "-o",
-            "jsonpath={.status.loadBalancer.ingress[0].hostname}",
+            'jsonpath={range .status.loadBalancer.ingress[*]}{.hostname}{"\\n"}{end}',
         )
 
-        if success and hostname and hostname != "null":
-            # Resolve hostname to IP
-            try:
-                import socket
+        if success and output:
+            import socket
 
-                ip = socket.gethostbyname(hostname)
-                return ip
-            except Exception as e:
-                self.logger.debug(f"Could not resolve LB hostname {hostname}: {e}")
+            for line in output.strip().split("\n"):
+                hostname = line.strip()
+                if hostname and hostname != "null":
+                    try:
+                        resolved_ip = socket.gethostbyname(hostname)
+                        if resolved_ip not in ips:
+                            ips.append(resolved_ip)
+                    except Exception as e:
+                        self.logger.debug(
+                            f"Could not resolve LB hostname {hostname}: {e}"
+                        )
 
-        return None
+        return ips
 
     def get_node_external_ip(self) -> Optional[str]:
         """Get external IP of the node running this pod"""

@@ -12,18 +12,18 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
 
-  {{- if .Values.dns.enabled }}
-  # DNS management - service status for IP detection
+  {{- if or .Values.dns.enabled .Values.haraka.proxyProtocol.autoDetect }}
+  # Service status for IP detection (DNS automation or PROXY protocol auto-detect)
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list"]
+  {{- end }}
 
-  {{- if .Values.dns.externalDns.enabled }}
+  {{- if and .Values.dns.enabled .Values.dns.externalDns.enabled }}
   # DNSEndpoint management for external-dns
   - apiGroups: ["externaldns.k8s.io"]
     resources: ["dnsendpoints"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
-  {{- end }}
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
