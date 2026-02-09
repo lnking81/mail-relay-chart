@@ -227,6 +227,36 @@ class DNSProvider(ABC):
         existing = self.list_records(zone_id, record.type, record.name)
 
         if existing:
+            # Check if any existing record already has the desired content
+            matching_record = None
+            for rec in existing:
+                if rec.content == record.content:
+                    matching_record = rec
+                    break
+
+            if matching_record:
+                # Desired content already exists
+                # Delete any duplicate records that we own (cleanup stale entries)
+                duplicates_deleted = True
+                for rec in existing:
+                    if rec.record_id != matching_record.record_id and rec.record_id:
+                        # Check if this duplicate is owned by us before deleting
+                        if self._check_ownership(zone_id, record):
+                            self.logger.info(
+                                f"Deleting duplicate {record.type.value} {record.name}: {rec.content}"
+                            )
+                            if not self.config.dry_run:
+                                if not self.delete_record(zone_id, rec.record_id):
+                                    duplicates_deleted = False
+                            else:
+                                self.logger.info(
+                                    "[DRY RUN] Would delete duplicate record"
+                                )
+
+                self.logger.debug(f"Record {record.type.value} {record.name} unchanged")
+                return duplicates_deleted
+
+            # Use first record for ownership check and update
             existing_record = existing[0]
 
             # Check ownership
@@ -235,11 +265,6 @@ class DNSProvider(ABC):
                     f"Record {record.type.value} {record.name} exists but not owned by us, skipping"
                 )
                 return False
-
-            # Check if update needed
-            if existing_record.content == record.content:
-                self.logger.debug(f"Record {record.type.value} {record.name} unchanged")
-                return True
 
             # Update record
             record.record_id = existing_record.record_id
