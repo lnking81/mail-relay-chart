@@ -94,7 +94,7 @@ data:
     max_received=100
 
     [max]
-    bytes={{ .Values.mail.messageSizeLimit }}
+    bytes={{ .Values.haraka.maxMessageSize | int64 }}
     mime_parts=1000
     line_length=512
     data_line_length=992
@@ -535,7 +535,7 @@ data:
   limit.ini: |
     [main]
     ; Max message size in bytes
-    max_bytes={{ .Values.mail.messageSizeLimit }}
+    max_bytes={{ .Values.haraka.maxMessageSize | int64 }}
     ; Max recipients per message
     max_recipients=100
     ; Max concurrent connections per IP

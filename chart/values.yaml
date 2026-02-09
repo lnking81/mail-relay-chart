@@ -109,9 +109,6 @@ mail:
     - "172.16.0.0/12"
     - "192.168.0.0/16"
 
-  # Maximum message size in bytes (default 25MB)
-  messageSizeLimit: 26214400
-
   # === Sender Validation ===
   # Restrict which domains/addresses can send through this relay
   senderValidation:
