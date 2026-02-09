@@ -27,7 +27,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent))
 
 from dns import DNSRecord, RecordType, get_provider_from_env
-from dns.base import DNSProvider
+from dns.base import DNSProvider, RecordType
 from utils.ip import IPDetector, IPDetectorConfig
 from utils.k8s import KubernetesClient, KubernetesConfig
 
@@ -395,6 +395,101 @@ class DNSManager:
 
         return result
 
+    def check_records(
+        self, incoming_ip: str, all_ips: list[str]
+    ) -> tuple[bool, list[str]]:
+        """
+        Check if DNS records are correct without modifying them.
+
+        Args:
+            incoming_ip: Expected incoming IP for A record
+            all_ips: Expected IPs for SPF record
+
+        Returns:
+            Tuple of (all_correct, list of issues)
+        """
+        issues = []
+
+        # Check A record for mail hostname
+        if self.mail_config.create_a:
+            hostname = self.mail_config.hostname
+            domain = self._extract_domain(hostname)
+            zone_id = self._get_zone_id(domain)
+
+            if zone_id:
+                existing = self.provider.list_records(zone_id, RecordType.A, hostname)
+                if not existing:
+                    issues.append(f"A record for {hostname} missing")
+                elif existing[0].content != incoming_ip:
+                    issues.append(
+                        f"A record {hostname}: {existing[0].content} != {incoming_ip}"
+                    )
+
+        # Check per-domain records
+        for domain_cfg in self.mail_config.domains:
+            domain = domain_cfg["name"]
+            selector = domain_cfg.get("dkimSelector", "mail")
+
+            zone_id = self._get_zone_id(domain)
+            if not zone_id:
+                issues.append(f"Zone not found for {domain}")
+                continue
+
+            # Check MX record
+            if self.mail_config.create_mx:
+                existing = self.provider.list_records(zone_id, RecordType.MX, domain)
+                if not existing:
+                    issues.append(f"MX record for {domain} missing")
+                elif existing[0].content != self.mail_config.hostname:
+                    issues.append(
+                        f"MX record {domain}: {existing[0].content} != {self.mail_config.hostname}"
+                    )
+
+            # Check SPF record
+            if self.mail_config.create_spf:
+                expected_spf = self.build_spf_record(all_ips)
+                existing = self.provider.list_records(zone_id, RecordType.TXT, domain)
+                spf_found = False
+                for rec in existing:
+                    if rec.content.startswith("v=spf1"):
+                        spf_found = True
+                        if rec.content != expected_spf:
+                            issues.append(
+                                f"SPF record {domain} mismatch: {rec.content} != {expected_spf}"
+                            )
+                        break
+                if not spf_found:
+                    issues.append(f"SPF record for {domain} missing")
+
+            # Check DKIM record
+            if self.mail_config.create_dkim:
+                dkim_name = f"{selector}._domainkey.{domain}"
+                existing = self.provider.list_records(
+                    zone_id, RecordType.TXT, dkim_name
+                )
+                dkim_content = self.k8s.get_dkim_record(domain)
+                if dkim_content:
+                    if not existing:
+                        issues.append(f"DKIM record for {domain} missing")
+                    elif existing[0].content != dkim_content:
+                        issues.append(f"DKIM record {domain} mismatch")
+
+            # Check DMARC record
+            if self.mail_config.create_dmarc:
+                dmarc_name = f"_dmarc.{domain}"
+                expected_dmarc = self.build_dmarc_record(domain)
+                existing = self.provider.list_records(
+                    zone_id, RecordType.TXT, dmarc_name
+                )
+                if not existing:
+                    issues.append(f"DMARC record for {domain} missing")
+                elif existing[0].content != expected_dmarc:
+                    issues.append(
+                        f"DMARC record {domain}: {existing[0].content} != {expected_dmarc}"
+                    )
+
+        return (len(issues) == 0, issues)
+
 
 def setup_logging(verbose: bool = False):
     """Configure logging"""
@@ -481,13 +576,27 @@ def main():
     if args.command in ("init", "update"):
         success = manager.init_or_update(wait_for_lb=args.wait_for_lb)
 
-        # Save IP to shared volume for watcher
+        # Save IPs to shared volume for watcher
         if success and shared_dir.exists():
             incoming_ip = ip_detector.get_incoming_ip(k8s, wait_timeout=0)
+            outbound_ip = ip_detector.detect_outbound_ip()
+            all_ips = ip_detector.get_all_ips(k8s, wait_timeout=0)
+
             if incoming_ip:
+                # Save full state as JSON
+                state = {
+                    "incoming_ip": incoming_ip,
+                    "outbound_ip": outbound_ip or "",
+                    "all_ips": all_ips,
+                }
+                state_file = shared_dir / "dns-state.json"
+                state_file.write_text(json.dumps(state))
+                logger.info(f"Saved state to {state_file}")
+
+                # Also write legacy file for backward compatibility
                 ip_file = shared_dir / "current-ip"
                 ip_file.write_text(incoming_ip)
-                logger.info(f"Saved IP to {ip_file}")
+                logger.info(f"Saved incoming IP to {ip_file}")
 
         sys.exit(0 if success else 1)
 
