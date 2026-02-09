@@ -1,0 +1,47 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# GitHub
+.github/
+
+# Helm chart (not needed in image)
+chart/
+
+# Documentation
+README.md
+HETZNER_LB_ANNOTATIONS.md
+LICENSE
+*.md
+
+# Test files
+test-values.yaml
+send-test-emails.sh
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.tar
+*.tar.gz
+*.zip

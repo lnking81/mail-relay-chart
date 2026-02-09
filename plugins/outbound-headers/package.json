@@ -1,0 +1,20 @@
+{
+    "name": "haraka-plugin-outbound-headers",
+    "version": "1.0.0",
+    "description": "Adds VERP Return-Path and tracking headers for bounce/FBL correlation",
+    "main": "index.js",
+    "keywords": [
+        "haraka",
+        "plugin",
+        "verp",
+        "bounce",
+        "fbl",
+        "tracking"
+    ],
+    "author": "mail-relay-chart",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/lnking81/mail-relay-chart"
+    }
+}

@@ -1,0 +1,21 @@
+{
+    "name": "haraka-plugin-rcpt-to-inbound",
+    "version": "1.0.0",
+    "description": "Accepts inbound mail for bounce/FBL processing with VERP support",
+    "main": "index.js",
+    "keywords": [
+        "haraka",
+        "plugin",
+        "rcpt",
+        "inbound",
+        "bounce",
+        "fbl",
+        "verp"
+    ],
+    "author": "mail-relay-chart",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/lnking81/mail-relay-chart"
+    }
+}

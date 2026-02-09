@@ -6,14 +6,20 @@ on:
       - main
       - master
     paths:
-      - "docker/**"
+      - "Dockerfile"
+      - "plugins/**"
+      - "scripts/**"
+      - "requirements.txt"
       - ".github/workflows/build-docker.yml"
   pull_request:
     branches:
       - main
       - master
     paths:
-      - "docker/**"
+      - "Dockerfile"
+      - "plugins/**"
+      - "scripts/**"
+      - "requirements.txt"
       - ".github/workflows/build-docker.yml"
 
 env:
@@ -58,8 +64,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./docker
-          file: ./docker/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}

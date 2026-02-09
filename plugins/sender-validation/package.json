@@ -1,0 +1,20 @@
+{
+    "name": "sender-validation",
+    "version": "1.0.0",
+    "description": "Sender validation plugin for Haraka - whitelist/blacklist for OUTBOUND mail only",
+    "main": "index.js",
+    "author": "mail-relay-chart",
+    "license": "MIT",
+    "keywords": [
+        "haraka",
+        "haraka-plugin",
+        "sender",
+        "validation",
+        "whitelist",
+        "blacklist"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/lnking81/mail-relay-chart"
+    }
+}

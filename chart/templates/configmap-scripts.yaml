@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-scripts
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+data:
+  # ==========================================================================
+  # Entrypoint Script - Starts Haraka
+  # ==========================================================================
+  entrypoint.sh: |
+    #!/bin/sh
+    set -e
+
+    echo "=== Mail Relay Entrypoint ==="
+    echo "Hostname: ${HARAKA_HOSTNAME}"
+
+    # Copy config from template to working directory (follow symlinks)
+    echo "Copying Haraka configuration..."
+    cp -rL /app/config-template/* /app/config/
+    ls -la /app/config/
+
+    # Ensure queue directory exists
+    mkdir -p {{ .Values.haraka.queueDir }}
+
+    # Start Haraka
+    echo "Starting Haraka..."
+    exec haraka -c /app
+
+  # ==========================================================================
+  # DKIM Init Script - Generates keys and stores in Kubernetes Secrets
+  # ==========================================================================
+  init-dkim.sh: |
+    #!/bin/bash
+    set -e
+
+    # Handle termination signals for fast shutdown
+    trap 'echo "Received SIGTERM, exiting..."; exit 0' SIGTERM SIGINT
+
+    echo "=== DKIM Key Initialization ==="
+
+    FULLNAME="{{ include "mail-relay.fullname" . }}"
+
+    {{- range .Values.mail.domains }}
+    # --- Domain: {{ .name }} ---
+    DOMAIN="{{ .name }}"
+    SELECTOR="{{ include "mail-relay.dkimSelector" . }}"
+    SECRET_NAME="${FULLNAME}-dkim-{{ .name | replace "." "-" }}"
+    DOMAIN_DIR="/dkim/${DOMAIN}"
+    PRIVATE_KEY="${DOMAIN_DIR}/private"
+
+    echo "Processing domain: ${DOMAIN} (selector: ${SELECTOR})"
+
+    # Create domain directory structure for haraka-plugin-dkim
+    mkdir -p "${DOMAIN_DIR}"
+
+    # Check if secret already exists
+    if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" >/dev/null 2>&1; then
+      echo "  Secret exists, extracting keys..."
+      kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" \
+        -o jsonpath='{.data.private\.key}' | base64 -d > "${PRIVATE_KEY}"
+      kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" \
+        -o jsonpath='{.data.public\.key}' | base64 -d > "${DOMAIN_DIR}/public"
+      kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" \
+        -o jsonpath='{.data.selector}' | base64 -d > "${DOMAIN_DIR}/selector"
+      echo "  Keys extracted to ${DOMAIN_DIR}/"
+    else
+      echo "  Generating new ${KEY_SIZE}-bit RSA key..."
+
+      # Generate RSA private key
+      openssl genrsa -out "${PRIVATE_KEY}" "${KEY_SIZE}" 2>/dev/null
+
+      # Extract public key in DNS format
+      PUBLIC_KEY=$(openssl rsa -in "${PRIVATE_KEY}" -pubout -outform PEM 2>/dev/null | \
+        grep -v '^-' | tr -d '\n')
+
+      # Create DNS record value
+      DNS_RECORD="v=DKIM1; k=rsa; p=${PUBLIC_KEY}"
+
+      # Write selector and public key files
+      echo -n "${SELECTOR}" > "${DOMAIN_DIR}/selector"
+      echo -n "${PUBLIC_KEY}" > "${DOMAIN_DIR}/public"
+
+      echo "  Creating Kubernetes secret..."
+
+      # Create secret with all DKIM data (idempotent with --dry-run | apply)
+      kubectl create secret generic "${SECRET_NAME}" \
+        --namespace="${NAMESPACE}" \
+        --from-file=private.key="${PRIVATE_KEY}" \
+        --from-literal=public.key="${PUBLIC_KEY}" \
+        --from-literal=dns.record="${DNS_RECORD}" \
+        --from-literal=selector="${SELECTOR}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+      # Add Helm labels for proper management
+      kubectl label secret "${SECRET_NAME}" -n "${NAMESPACE}" \
+        app.kubernetes.io/managed-by=Helm \
+        app.kubernetes.io/instance=${RELEASE_NAME} \
+        app.kubernetes.io/name={{ include "mail-relay.name" $ }} \
+        helm.sh/chart={{ include "mail-relay.chart" $ }} \
+        --overwrite
+
+      echo "  Secret created: ${SECRET_NAME}"
+      echo "  DNS Record: ${SELECTOR}._domainkey.${DOMAIN}"
+    fi
+
+    # Verify key files exist
+    echo "  Verifying key files..."
+    ls -la "${DOMAIN_DIR}/"
+    if [ ! -f "${PRIVATE_KEY}" ]; then
+      echo "  ERROR: Private key not found!" >&2
+      exit 1
+    fi
+
+    {{- end }}
+
+    echo ""
+    echo "=== DKIM initialization complete ==="
+

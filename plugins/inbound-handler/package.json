@@ -1,0 +1,22 @@
+{
+    "name": "haraka-plugin-inbound-handler",
+    "version": "1.0.0",
+    "description": "Processes inbound bounce/FBL messages and sends webhooks",
+    "main": "index.js",
+    "keywords": [
+        "haraka",
+        "plugin",
+        "inbound",
+        "bounce",
+        "fbl",
+        "dsn",
+        "arf",
+        "webhook"
+    ],
+    "author": "mail-relay-chart",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/lnking81/mail-relay-chart"
+    }
+}

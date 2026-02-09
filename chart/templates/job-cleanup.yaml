@@ -1,0 +1,104 @@
+{{- if or (and .Values.dns.enabled .Values.dns.externalDns.enabled) .Values.dkim.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-cleanup
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  ttlSecondsAfterFinished: 60
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "mail-relay.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cleanup
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: cleanup
+          image: bitnami/kubectl:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              FULLNAME="{{ include "mail-relay.fullname" . }}"
+              NAMESPACE="{{ .Release.Namespace }}"
+
+              echo "=== Cleanup Job ==="
+              echo "Release: $FULLNAME"
+              echo "Namespace: $NAMESPACE"
+
+              {{- if and .Values.dns.enabled .Values.dns.externalDns.enabled }}
+              # Delete all DNSEndpoints created by this release
+              echo ""
+              echo "Checking for DNSEndpoints..."
+              ENDPOINTS=$(kubectl get dnsendpoint -n "$NAMESPACE" -l "app.kubernetes.io/instance={{ .Release.Name }}" -o name 2>/dev/null || true)
+              if [ -n "$ENDPOINTS" ]; then
+                echo "Found DNSEndpoints:"
+                echo "$ENDPOINTS"
+                echo ""
+                echo "Deleting DNSEndpoints..."
+                for ep in $ENDPOINTS; do
+                  if kubectl delete "$ep" -n "$NAMESPACE" --timeout=60s 2>/dev/null; then
+                    echo "  ✓ Deleted: $ep"
+                  else
+                    echo "  ✗ Warning: Failed to delete $ep"
+                  fi
+                done
+
+                # Wait for external-dns to process deletions
+                echo ""
+                echo "Waiting for external-dns to delete DNS records..."
+                sleep 15
+              else
+                echo "No DNSEndpoints found (already deleted or never created)"
+              fi
+              {{- end }}
+
+              {{- if .Values.dkim.enabled }}
+              # Delete DKIM secrets
+              echo ""
+              echo "Deleting DKIM secrets..."
+              DKIM_SECRETS=$(kubectl get secrets -n "$NAMESPACE" -o name 2>/dev/null | grep "secret/${FULLNAME}-dkim-" || true)
+              if [ -n "$DKIM_SECRETS" ]; then
+                for secret in $DKIM_SECRETS; do
+                  echo "Deleting $secret..."
+                  kubectl delete "$secret" -n "$NAMESPACE" --timeout=30s || echo "Warning: Failed to delete $secret"
+                done
+                echo "DKIM secrets deleted"
+              else
+                echo "No DKIM secrets found"
+              fi
+              {{- end }}
+
+              echo ""
+              echo "=== Cleanup completed ==="
+
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+{{- end }}

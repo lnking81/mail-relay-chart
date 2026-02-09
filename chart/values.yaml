@@ -1,205 +1,758 @@
-# Default values for mail-relay.
-# This is a YAML-formatted file.
+# =============================================================================
+# Mail Relay Helm Chart - Default Values
+# Haraka-based SMTP relay with DKIM signing and DNS automation
+# =============================================================================
 
-# Image configuration
+# === Container Image ===
 image:
   repository: ghcr.io/lnking81/mail-relay-chart
+  # Defaults to Chart appVersion if not set
+  tag: ""
   pullPolicy: IfNotPresent
-  tag: "latest"
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Service configuration
-service:
-  type: ClusterIP
-  ports:
-    smtp:
-      port: 25
-      targetPort: 25
-      protocol: TCP
+# === Haraka Configuration ===
+haraka:
+  # Custom SMTP banner (hides Haraka version for security)
+  # Default Haraka shows: "220 hostname ESMTP Haraka/x.x.x ready (UUID)"
+  # Set custom greeting to hide software identity
+  # Example: "ready" -> "220 hostname ESMTP ready"
+  smtpBanner: "ready"
 
-# External DNS configuration
-externalDns:
+  # Show UUID in banner (default: 6 chars). Set to 0 to hide completely
+  bannerUuidChars: 0
+
+  # Additional plugins beyond core (relay, dkim_sign, limit)
+  # Example: ["spf", "headers"]
+  plugins: []
+
+  # Outbound connection concurrency
+  concurrency: 50
+
+  # IP version preference for outbound delivery
+  # - "default": Prefer IPv6 when both exist at same MX priority
+  # - "v4": Try IPv4 first, then IPv6
+  # - "v6": Try IPv6 first, then IPv4
+  inetPrefer: "v4"
+
+  # Queue directory inside container
+  queueDir: /data/queue
+
+  # HAProxy PROXY Protocol v1/v2 support
+  # Enables preservation of real client IP through load balancers
+  proxyProtocol:
+    # Enable PROXY protocol parsing
+    enabled: false
+
+    # Trusted proxy sources (IPs or CIDRs)
+    # Only connections from these sources will have PROXY headers parsed
+    # Empty = accept from any source (use with caution)
+    # Examples:
+    #   - "10.0.0.0/8"        # Internal network
+    #   - "172.16.0.0/12"     # Docker/Kubernetes networks
+    #   - "192.168.1.100"     # Specific load balancer IP
+    trustedProxies: []
+
+# === Mail Settings ===
+mail:
+  # FQDN used in SMTP banner and HELO/EHLO
+  hostname: mail.example.com
+
+  # Domains to handle
+  # Each domain can have its own DKIM selector
+  domains:
+    - name: example.com
+      dkimSelector: mail
+
+  # Upstream relay configuration (optional)
+  # If disabled, mail is delivered directly to recipient MX
+  relay:
+    enabled: false
+    host: ""
+    port: 587
+    tls: true
+    auth:
+      enabled: false
+      username: ""
+      password: ""
+      # Use existing secret instead of inline credentials
+      # Secret must have keys: username, password
+      existingSecret: ""
+
+  # Networks allowed to relay through this server
+  # These IPs/CIDRs can send mail without authentication
+  trustedNetworks:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+  # Maximum message size in bytes (default 25MB)
+  messageSizeLimit: 26214400
+
+  # === Sender Validation ===
+  # Restrict which domains/addresses can send through this relay
+  senderValidation:
+    # Enable sender domain whitelist
+    # When true, only allowed senders can use MAIL FROM
+    enabled: true
+    # Check From header matches MAIL FROM domain
+    # Prevents From header spoofing
+    checkFromHeader: true
+
+    # Allowed senders whitelist
+    # STRICT MODE: If specified, ONLY these senders are allowed
+    #              (mail.domains is NOT automatically included)
+    # If empty: all addresses in mail.domains are allowed
+    # Supports: email addresses, domains, regex patterns
+    # Examples:
+    #   - "service@partner.com"       # Specific address
+    #   - "partner.com"               # Entire domain
+    #   - "/.*@notifications\\./"     # Regex (must start with /)
+    allowedFrom: []
+
+    # Forbidden senders blacklist (takes priority over whitelist)
+    # Prevents internal addresses from being spoofed by external software
+    # Use for: protecting real user addresses from being used as MAIL FROM
+    # Examples:
+    #   - "ceo@example.com"           # Block specific high-value address
+    #   - "hr@example.com"
+    #   - "/support\\+.*@/"           # Block support+tag@ addresses
+    forbiddenFrom: []
+
+# === Delivery Rate Limiting ===
+# Control outbound delivery speed per domain (prevents Gmail/Yahoo throttling)
+rateLimit:
+  # Enable outbound rate limiting
+  enabled: false
+
+  # Global limits (applied to all domains unless overridden)
+  global:
+    # Max concurrent outbound connections total
+    maxConnections: 100
+    # Max messages per connection before reconnect
+    maxPerConnection: 50
+    # Delay between messages in milliseconds (0 = no delay)
+    delayBetweenMessages: 0
+
+  # Per-domain limits for major providers (prevents reputation damage)
+  # Format: rate is "count/interval" where interval is s/m/h/d
+  # Example: "1/20s" = 1 message every 20 seconds
+  domains:
+    # Gmail - very strict, needs slow warmup
+    gmail.com:
+      enabled: false
+      # Max concurrent connections to Gmail
+      maxConnections: 1
+      # Messages per connection
+      maxPerConnection: 3
+      # Rate limit: messages per interval
+      rate: "1/20s"
+      # Delay between messages (ms)
+      delayMs: 15000
+
+    # Google Workspace (same as Gmail)
+    googlemail.com:
+      enabled: false
+      maxConnections: 1
+      maxPerConnection: 3
+      rate: "1/20s"
+      delayMs: 15000
+
+    # Microsoft (Outlook, Hotmail, Live)
+    outlook.com:
+      enabled: false
+      maxConnections: 2
+      maxPerConnection: 5
+      rate: "1/10s"
+      delayMs: 10000
+
+    hotmail.com:
+      enabled: false
+      maxConnections: 2
+      maxPerConnection: 5
+      rate: "1/10s"
+      delayMs: 10000
+
+    live.com:
+      enabled: false
+      maxConnections: 2
+      maxPerConnection: 5
+      rate: "1/10s"
+      delayMs: 10000
+
+    # Yahoo
+    yahoo.com:
+      enabled: false
+      maxConnections: 2
+      maxPerConnection: 10
+      rate: "1/10s"
+      delayMs: 10000
+
+  # Custom domain limits (add your own)
+  # customDomains:
+  #   example.com:
+  #     maxConnections: 5
+  #     rate: "10/1m"
+  customDomains: {}
+
+# === Adaptive Rate Limiting (Dynamic) ===
+# Automatically adjusts delivery speed based on server responses
+# When receiving 421/rate limit errors - slows down (backoff)
+# When deliveries succeed - speeds up (recovery)
+adaptiveRate:
+  # Enable adaptive rate limiting
+  enabled: false
+
+  # Port for metrics endpoint (separate from main Haraka metrics)
+  metricsPort: 8093
+
+  # Default settings for all domains
+  defaults:
+    # Minimum delay between messages (ms) - won't go faster than this
+    minDelay: 1000
+    # Maximum delay between messages (ms) - won't go slower than this
+    maxDelay: 60000
+    # Initial delay when starting (ms)
+    initialDelay: 5000
+    # Multiply delay by this on failure (1.5 = +50%)
+    backoffMultiplier: 1.5
+    # Multiply delay by this on success (0.9 = -10%)
+    recoveryRate: 0.9
+    # Consecutive successes needed before reducing delay
+    successThreshold: 5
+
+  # Per-domain configuration
+  # Only domains listed here will have adaptive rate limiting
+  domains:
+    # Gmail - very strict, use conservative settings
+    gmail.com:
+      enabled: false
+      minDelay: 15000 # 15 seconds minimum
+      maxDelay: 120000 # 2 minutes maximum
+      initialDelay: 20000 # Start at 20 seconds
+      backoffMultiplier: 2.0 # Double delay on failure
+      recoveryRate: 0.95 # Slow recovery
+      successThreshold: 10 # Need 10 successes to speed up
+
+    # Google Workspace (same infrastructure as Gmail)
+    googlemail.com:
+      enabled: false
+      minDelay: 15000
+      maxDelay: 120000
+      initialDelay: 20000
+      backoffMultiplier: 2.0
+      recoveryRate: 0.95
+      successThreshold: 10
+
+    # Microsoft (Outlook, Hotmail, Live)
+    outlook.com:
+      enabled: false
+      minDelay: 10000
+      maxDelay: 90000
+      initialDelay: 15000
+      backoffMultiplier: 1.5
+      recoveryRate: 0.9
+      successThreshold: 5
+
+    hotmail.com:
+      enabled: false
+      minDelay: 10000
+      maxDelay: 90000
+      initialDelay: 15000
+
+    live.com:
+      enabled: false
+      minDelay: 10000
+      maxDelay: 90000
+      initialDelay: 15000
+
+    # Yahoo
+    yahoo.com:
+      enabled: false
+      minDelay: 10000
+      maxDelay: 90000
+      initialDelay: 15000
+
+  # Custom domains (add your own)
+  # customDomains:
+  #   corporate.com:
+  #     enabled: true
+  #     minDelay: 5000
+  #     initialDelay: 10000
+  customDomains: {}
+
+# === DKIM Configuration ===
+dkim:
+  # Enable DKIM signing
   enabled: true
+
+  # RSA key size for auto-generated keys
+  keySize: 2048
+
+  # Keys are auto-generated via init container and stored in Secrets
+  # To use pre-existing keys, create secrets manually with format:
+  #   {release}-dkim-{domain-with-dashes}
+  # containing: private.key, public.key, dns.record, selector
+
+# === DNS Automation ===
+dns:
+  # Enable DNS record management
+  enabled: false
+
+  # DNS Provider: "external-dns" | "cloudflare"
+  # - external-dns: Creates DNSEndpoint CRD for external-dns controller
+  # - cloudflare: Direct Cloudflare API integration (recommended for TXT records)
+  provider: external-dns
+
+  # Ownership tracking for managed DNS records
+  # Records are marked with TXT records to prevent modifying records
+  # created by other instances or manually
+  ownership:
+    # Unique identifier for this instance
+    # Default: "{namespace}/{release-name}"
+    # Set custom value when multiple releases share zones
+    ownerId: ""
+
+    # TXT record prefix for ownership markers
+    # Creates records like: _mail-relay-owner.example.com
+    txtPrefix: "mail-relay-owner"
+
+  # IP Detection settings
+  ip:
+    # Auto-detect IP from Service (LoadBalancer or NodePort)
+    fromService: true
+
+    # Detect outbound NAT IP via external API
+    # Required for SPF when outbound IP differs from incoming
+    detectOutbound: true
+
+    # For NodePort: how to get node external IP
+    # Options: "api" (from node ExternalIP), "externalApi" (curl), "static"
+    nodeIpSource: "api"
+
+    # External APIs for IP detection
+    externalApis:
+      - https://ifconfig.me/ip
+      - https://icanhazip.com
+      - https://api.ipify.org
+
+    # Static IPs (all will be added to SPF, first used for A record)
+    # If set, disables auto-detection
+    static: []
+    # Example for dual-IP setup:
+    # static:
+    #   - 203.0.113.50   # Incoming (A record)
+    #   - 198.51.100.10  # Outgoing (SPF only)
+
+  # Cloudflare DNS provider settings (when provider: cloudflare)
+  cloudflare:
+    # API Token with DNS:Edit permissions for zones
+    # Token permissions: Zone:DNS:Edit, Zone:Zone:Read
+    # Create at: https://dash.cloudflare.com/profile/api-tokens
+    apiToken: ""
+
+    # Use existing secret for API token
+    # Secret must have key: api-token
+    existingSecret: ""
+
+    # Cloudflare Zone IDs (optional - auto-detected from domain if not set)
+    # Useful when you have multiple zones or zone name differs from domain
+    # Format: map of domain -> zone ID
+    # zoneIds:
+    #   example.com: "abc123..."
+    zoneIds: {}
+
+    # Proxied records (Cloudflare orange cloud)
+    # Only affects A/CNAME records, TXT records are never proxied
+    proxied: false
+
+  # external-dns integration (when provider: external-dns)
+  externalDns:
+    # Create DNSEndpoint custom resource
+    enabled: false
+
+  # Which records to create
+  records:
+    a: true # A record for mail hostname
+    mx: true # MX record for domains
+    spf: true # SPF TXT record
+    dkim: true # DKIM TXT record (requires dkim.enabled)
+    dmarc: true # DMARC TXT record
+
+  # SPF policy: -all (hard fail), ~all (soft fail), ?all (neutral)
+  spfPolicy: "~all"
+
+  # DMARC policy: none, quarantine, reject
+  dmarcPolicy: none
+
+  # DMARC aggregate report address (empty = postmaster@domain)
+  dmarcRua: ""
+
+  # TTL for DNS records in seconds (default: 5 minutes)
   ttl: 300
 
-  # Owner ID for external-dns - should match your external-dns installation
-  # Common values: "k8s-cluster-external-dns", "external-dns", or cluster-specific IDs
-  # Set this to match your external-dns configuration's --txt-owner-id parameter
-  ownerId: "k8s-cluster-external-dns"
+  # IP change watcher sidecar
+  watcher:
+    # Enable IP change monitoring sidecar
+    enabled: true
 
-  # Additional annotations for external-dns
+    # Interval between IP checks (seconds)
+    interval: 60
+
+    # Timeout waiting for LoadBalancer IP (seconds)
+    # Set to 0 to fail immediately if LB IP not ready
+    waitForLbTimeout: 300
+
+  # Wait for DNS propagation before starting Haraka
+  waitForRecords:
+    # Enable DNS verification init container
+    enabled: true
+
+    # Which records to verify before starting
+    records:
+      a: true # Wait for A record
+      dkim: true # Wait for DKIM TXT record
+      spf: false # SPF is less critical
+
+    # Maximum time to wait for DNS propagation (seconds)
+    timeout: 600
+
+    # Interval between DNS checks (seconds)
+    interval: 10
+
+    # Custom DNS server for verification (empty = system default)
+    # Useful to check authoritative nameserver directly
+    dnsServer: ""
+
+# === Service Configuration ===
+service:
+  # Service type: ClusterIP, NodePort, LoadBalancer
+  type: ClusterIP
+
+  # SMTP port
+  port: 25
+
+  # NodePort settings (when type: NodePort)
+  # If not specified, Kubernetes assigns a random port 30000-32767
+  nodePort: ""
+
+  # LoadBalancer settings (when type: LoadBalancer)
+  loadBalancerIP: "" # Request specific IP (cloud-dependent)
+  loadBalancerSourceRanges: [] # Restrict access by IP
+  loadBalancerClass: "" # LoadBalancer class (e.g., "hcloud" for Hetzner)
+
+  # Cloud-specific annotations
   annotations: {}
+  # Examples:
+  #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+  #   service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  #   metallb.universe.tf/loadBalancerIPs: "192.168.1.100"
 
-  # Automated DNS record management
-  autoManageDnsRecords: false # Set to true to auto-create SPF/DKIM/DMARC records with detected IP
-  autoCreateDmarc: true # Create DMARC records when autoManageDnsRecords is enabled
-  dmarcPolicy: "v=DMARC1; p=none; rua=mailto:postmaster@" # DMARC policy (domain will be appended)
-
-  # Check interval for IP changes (minutes) - only used when ipDetection is true
-  ipCheckInterval: 5
-
-# DNS Helper configuration
-dnsHelper:
-  # Create helper scripts and documentation
-  enabled: true
-
-  # IP Detection configuration (deprecated: use top-level ipDetection/externalIps)
-  ipDetection: true # Set to false to disable automatic IP detection
-  # Manual external IPs (deprecated: prefer top-level externalIps)
-  # When specified, these IPs will be used instead of auto-detected IP
-  externalIps: []
-  # Example:
-  # externalIps:
-  #   - "203.0.113.1"
-  #   - "203.0.113.2"
-
-# Mail configuration
-mail:
-  hostname: "mail.example.com"
-  domains:
-    - name: "example.com"
-      dkimSelector: "mail"
-      # Optional: Provide existing DKIM keys for this domain
-      # dkim:
-      #   privateKey: |
-      #     -----BEGIN RSA PRIVATE KEY-----
-      #     ...base64 encoded private key...
-      #     -----END RSA PRIVATE KEY-----
-      #   publicKey: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQE..."
-      #   dnsRecord: "v=DKIM1;h=sha256;k=rsa;p=MIIBIjANBgkqhkiG..."
-      #   selector: "mail"  # Override default selector for this domain
-
-  smtp:
-    tlsSecurityLevel: "may"
-
-  # Relay configuration
-  relayHost: "" # External SMTP relay host (optional)
-  relayPort: 587
-  relayCredentials:
-    enabled: false
-    username: ""
-    password: ""
-    existingSecret: ""
-    usernameKey: "username"
-    passwordKey: "password"
-
-  # Trusted networks/hosts that can send mail through this relay
-  trustedNetworks:
-    - "127.0.0.0/8" # Localhost
-    - "10.0.0.0/8" # Private network
-    - "172.16.0.0/12" # Docker default
-    - "192.168.0.0/16" # Private network
-
-  # Additional trusted IPs (from your history)
-  trustedIPs: []
-
-  # Message size limit (in bytes)
-  messageSizeLimit: "50MB"
-
-# DKIM configuration
-dkim:
-  enabled: true
-  # Key size in bits
-  keySize: 2048
-  # Automatically generate DKIM keys if they don't exist
-  autoGenerate: true
-  # Existing secret containing DKIM keys (optional)
-  existingSecret: ""
-  # Preserve DKIM secrets when helm release is deleted (set to false for complete cleanup)
-  preserveSecretsOnDelete: false
-
-# Persistence
+# === Persistence ===
 persistence:
+  # Enable persistent storage for mail queue
   enabled: true
-  storageClass: ""
-  accessMode: ReadWriteOnce
   size: 1Gi
-  # Existing PVC name (optional)
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  # Use existing PVC
   existingClaim: ""
 
-# Security context
-securityContext:
-  runAsNonRoot: false
-  runAsUser: 0
+# === Network Policy ===
+networkPolicy:
+  # Enable network policy to restrict ingress
+  enabled: false
 
+  # CIDRs allowed to connect to SMTP port
+  allowedCidrs: []
+  # Example:
+  # allowedCidrs:
+  #   - 10.0.0.0/8
+
+# === Pod Lifecycle ===
+# Time for containers to shutdown gracefully after SIGTERM
+# Kubernetes sends SIGKILL after this period
+# Default: 30 seconds
+terminationGracePeriodSeconds: 30
+
+# === Security Context ===
 podSecurityContext:
-  runAsNonRoot: false
-  runAsUser: 0
-  fsGroup: 0
+  fsGroup: 1000
 
-# Resources
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
 
-# Node selector
+# === Resources ===
+resources: {}
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # limits:
+  #   cpu: 500m
+  #   memory: 512Mi
+
+# === Scheduling ===
 nodeSelector: {}
-
-# Tolerations
 tolerations: []
-
-# Affinity
 affinity: {}
 
-# Service account
+# Pod anti-affinity to spread instances across nodes
+# Useful for NodePort scenarios to avoid port conflicts on same node
+podAntiAffinity:
+  # Enable anti-affinity rules
+  enabled: false
+
+  # Type: "hard" (required) or "soft" (preferred)
+  # Hard: pod won't schedule if no suitable node available
+  # Soft: scheduler will try to spread but won't fail
+  type: soft
+
+  # Topology key for spreading
+  # kubernetes.io/hostname = spread across nodes (default)
+  # topology.kubernetes.io/zone = spread across zones
+  topologyKey: kubernetes.io/hostname
+
+  # Custom instance group label value
+  # Pods with same group won't be scheduled on the same node
+  # Default uses chart name: all mail-relay instances are anti-affined
+  # Set different values to allow some instances to coexist
+  instanceGroup: ""
+
+# === Service Account ===
 serviceAccount:
-  # Specifies whether a service account should be created
   create: true
-  # Annotations to add to the service account
-  annotations: {}
-  # The name of the service account to use.
   name: ""
+  annotations: {}
 
-# Pod annotations
+# === Pod Metadata ===
 podAnnotations: {}
-
-# Pod labels
 podLabels: {}
 
-# Network policy
-networkPolicy:
-  enabled: true
-  ingress:
-    # Allow ingress from trusted networks
-    allowedCIDRs:
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
-
-# Monitoring
-monitoring:
+# === SMTP Authentication ===
+auth:
+  # Enable SMTP AUTH (AUTH PLAIN/LOGIN)
+  # When enabled, clients can authenticate to relay mail
   enabled: false
+
+  # Authentication methods to advertise
+  # Supported: PLAIN, LOGIN, CRAM-MD5
+  methods: "PLAIN,LOGIN"
+
+  # Require TLS before allowing authentication
+  # Should be true in production
+  requireTls: true
+
+  # Constrain sender to authenticated username
+  # When true: MAIL FROM must match or be subdomain of authenticated user
+  # Prevents authenticated users from spoofing other senders
+  constrainSender: true
+
+  # User credentials (username: password)
+  # Use existingSecret in production!
+  users: {}
+  # Example:
+  # users:
+  #   sender@example.com: "secretpassword"
+  #   app1@example.com: "app1password"
+
+  # Use existing secret for credentials
+  # Secret format: each key is username, value is password
+  # Example: kubectl create secret generic haraka-auth --from-literal=user@example.com=password
+  existingSecret: ""
+
+# === Inbound Mail Handling (Gateway Mode) ===
+# When enabled, server accepts specific addresses for local processing
+# (bounces, feedback loops, postmaster). Otherwise, pure relay mode.
+#
+# Flow:
+# 1. Outbound: Client sends X-Message-ID header → we set VERP Return-Path
+# 2. Bounce comes in: To bounce+{msg_id}@domain → we extract msg_id
+# 3. FBL comes in: Contains X-Haraka-MsgID header → we extract msg_id
+# 4. Webhook sent with original message_id for correlation
+inbound:
+  # Enable gateway mode (accept bounces/FBL)
+  enabled: false
+
+  # === Inbound Security (SPF/DKIM/DMARC verification) ===
+  # Only applied to inbound mail (not relayed outbound)
+  security:
+    # SPF (Sender Policy Framework) verification
+    spf:
+      # Enable SPF checking on inbound mail
+      enabled: true
+      # Reject mail that fails SPF (sender's IP not authorized)
+      # Honors the sender domain's SPF policy (-all = hard fail)
+      rejectFail: true
+      # Reject mail with SPF softfail (~all)
+      # Set to false to only reject hard fails (-all)
+      rejectSoftfail: false
+
+    # DKIM signature verification
+    dkim:
+      # Verify DKIM signatures on inbound mail
+      # Adds Authentication-Results header
+      enabled: true
+
+    # DMARC verification (checks SPF/DKIM alignment with From header)
+    dmarc:
+      # Enable DMARC verification
+      enabled: true
+      # Honor sender domain's DMARC policy
+      # When true: reject if domain has p=reject and check fails
+      rejectOnFail: true
+      # Honor quarantine policy (add X-Quarantine header)
+      # When true: mark message if domain has p=quarantine and check fails
+      quarantineOnFail: true
+
+  # Header to read client message ID from (for VERP and tracking)
+  # Client should include this header when sending email
+  # Example: X-Message-ID: order-12345
+  clientIdHeader: "X-Message-ID"
+
+  # Addresses to accept for local processing
+  # Patterns ending with "+" match prefix (VERP-style)
+  recipients:
+    - postmaster
+    - abuse
+    - "bounce+" # Accepts bounce+anything@domain (VERP)
+    - fbl
+
+  # Bounce processing settings
+  bounce:
+    # Enable bounce validation plugin
+    enabled: true
+    # VERP prefix for tracking original recipient
+    # Creates Return-Path: bounce+{timestamp}-{hmac}-{message_id}@domain
+    verpPrefix: "bounce+"
+    # Use sender's domain for bounce Return-Path if it's in mail.domains list
+    # sender@domain1.com → bounce+{id}@domain1.com (if domain1.com is configured)
+    # If sender's domain is not in the list, falls back to mail.hostname
+    useSenderDomain: true
+    # HMAC secret for VERP signature (auto-generated at runtime if empty)
+    # Protects against forged/spam bounce attacks
+    # IMPORTANT: Set this to a stable secret in production!
+    hmacSecret: ""
+    # Require HMAC validation on incoming bounces
+    # When true, rejects bounces without valid HMAC signature
+    # Set to false during migration from non-HMAC setup
+    requireHmac: true
+    # Maximum age of valid bounces in days
+    # Bounces older than this are rejected (protection against replay attacks)
+    maxAgeDays: 7
+
+# === Metrics / Monitoring ===
+metrics:
+  # Enable Prometheus metrics endpoint
+  enabled: false
+
   serviceMonitor:
+    # Create ServiceMonitor for Prometheus Operator
     enabled: false
-    namespace: ""
-    labels: {}
     interval: 30s
+    # Labels for ServiceMonitor (Prometheus Operator requires selector match)
+    # Default includes "release: monitoring" for standard kube-prometheus-stack
+    labels:
+      release: monitoring
 
-# Helm hooks configuration
-hooks:
-  # Run DKIM/DNS initialization jobs on helm upgrade (not just install)
-  # Default: false - jobs only run on initial install for faster upgrades
-  #
-  # IMPORTANT: Set to true (or use --set hooks.runOnUpgrade=true) when:
-  # - Adding new domains to mail.domains
-  # - Changing DKIM selectors
-  # - Need to regenerate DKIM keys
-  #
-  # For regular upgrades (no mail config changes), keep false for faster deploys
-  runOnUpgrade: false
+# === Web Dashboard ===
+dashboard:
+  # Haraka Watch plugin - real-time SMTP traffic monitoring
+  watch:
+    enabled: false
+    # Limit display to 1 connection per second (for high-traffic servers)
+    sampling: false
 
-# Health checks
-healthCheck:
-  enabled: true
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-  successThreshold: 1
+  # Log reader plugin - view per-connection logs
+  logReader:
+    enabled: false
+
+  # HTTP server port for dashboard and metrics
+  port: 8080
+
+  # Grafana dashboard auto-import
+  grafana:
+    # Create ConfigMap with dashboard JSON
+    enabled: false
+    # Labels for Grafana sidecar discovery
+    labels:
+      grafana_dashboard: "1"
+
+# === Redis (required for Watch Dashboard with multiple workers) ===
+redis:
+  enabled: false
+  # External Redis server
+  host: ""
+  port: 6379
+  # Optional password
+  password: ""
+  # Use existing secret for password
+  # Secret must have key: password
+  existingSecret: ""
+  # Database number
+  db: 0
+
+# === Webhooks (Delivery Events) ===
+webhooks:
+  # Enable delivery event webhooks
+  enabled: false
+
+  # Multiple webhook endpoints
+  # Each endpoint can have its own URL, events, and headers
+  #
+  # Available events:
+  # - delivered: Email successfully delivered to remote MX
+  # - bounced: Synchronous bounce (rejected during SMTP session)
+  # - deferred: Email temporarily deferred (4xx response)
+  # - bounce_received: Async bounce (DSN received later) [requires inbound.enabled]
+  # - complaint: FBL spam complaint received [requires inbound.enabled]
+  endpoints: []
+  # Example:
+  # endpoints:
+  #   - name: main-webhook
+  #     url: "https://api.example.com/webhooks/email"
+  #     events:
+  #       - delivered
+  #       - bounced
+  #       - bounce_received
+  #       - complaint
+  #     headers:
+  #       Authorization: "Bearer token123"
+  #   - name: analytics
+  #     url: "http://localhost:8888/webhook"
+  #     events:
+  #       - delivered
+  #       - bounced
+  #       - deferred
+
+  # Global settings (applied to all endpoints)
+  timeout: 5000
+  retry: true
+  maxRetries: 3
+
+# === Extra Sidecars ===
+# Add custom sidecar containers to the pod
+# Useful for debugging, log shipping, metrics collection, etc.
+sidecars: []
+# Example - HTTP echo server for webhook debugging:
+# sidecars:
+#   - name: webhook-echo
+#     image: mendhak/http-https-echo:33
+#     ports:
+#       - name: http
+#         containerPort: 8888
+#     env:
+#       - name: HTTP_PORT
+#         value: "8888"
+#     resources:
+#       requests:
+#         cpu: 10m
+#         memory: 32Mi
+#       limits:
+#         cpu: 100m
+#         memory: 64Mi

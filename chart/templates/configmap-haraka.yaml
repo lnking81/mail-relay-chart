@@ -1,0 +1,798 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-haraka
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+data:
+  {{- if .Values.persistence.enabled }}
+  # Queue directory path (read by Haraka outbound/queue.js)
+  queue_dir: |
+    /data/queue
+  {{- end }}
+
+  # === Core Settings ===
+  me: |
+    {{ .Values.mail.hostname }}
+
+  smtp.ini: |
+    [main]
+    listen=[::0]:25
+    nodes=1
+    strict_rfc1869=false
+
+    [headers]
+    add_received=true
+    clean_auth_results=true
+
+  # Connection settings - from Haraka default config/connection.ini
+  connection.ini: |
+    [main]
+    ; smtputf8=true
+
+    [haproxy]
+    ; HAProxy PROXY protocol v1/v2 support
+    ; Enables real client IP preservation through load balancers
+    {{- if .Values.haraka.proxyProtocol.enabled }}
+    {{- if .Values.haraka.proxyProtocol.trustedProxies }}
+    {{- range .Values.haraka.proxyProtocol.trustedProxies }}
+    hosts[]={{ . }}
+    {{- end }}
+    {{- else }}
+    ; WARNING: Accepting PROXY protocol from any source
+    hosts[]=0.0.0.0/0
+    {{- end }}
+    {{- else }}
+    ; PROXY protocol disabled
+    hosts[] =
+    {{- end }}
+
+    [headers]
+    add_received=true
+    clean_auth_results=true
+    ; Hide Haraka version from headers
+    show_version=false
+    max_lines=1000
+    max_received=100
+
+    [max]
+    bytes={{ .Values.mail.messageSizeLimit }}
+    mime_parts=1000
+    line_length=512
+    data_line_length=992
+
+    [message]
+    {{- if .Values.haraka.smtpBanner }}
+    ; Custom greeting (hides Haraka version)
+    greeting[]={{ .Values.haraka.smtpBanner }}
+    {{- end }}
+    helo=Haraka is at your service.
+    close=closing connection. Have a jolly good day.
+
+    [uuid]
+    banner_chars={{ .Values.haraka.bannerUuidChars | default 0 }}
+    deny_chars=0
+
+  host_list: |
+    {{- range .Values.mail.domains }}
+    {{ .name }}
+    {{- end }}
+
+  {{- if .Values.auth.enabled }}
+  # === SMTP Authentication (auth/flat_file plugin) ===
+  auth_flat_file.ini: |
+    [core]
+    ; Authentication methods: PLAIN, LOGIN, CRAM-MD5
+    methods={{ .Values.auth.methods | default "PLAIN,LOGIN" }}
+
+    ; Require TLS before allowing authentication
+    {{- if .Values.auth.requireTls }}
+    ; TLS is enforced (AUTH only advertised after STARTTLS)
+    {{- end }}
+
+    ; Constrain MAIL FROM to authenticated username
+    ; Prevents authenticated users from spoofing other senders
+    constrain_sender={{ .Values.auth.constrainSender | default true }}
+
+    [users]
+    ; Format: username=password
+    {{- if .Values.auth.existingSecret }}
+    ; Credentials loaded from secret at runtime
+    {{- else }}
+    {{- range $user, $pass := .Values.auth.users }}
+    {{ $user }}={{ $pass }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.mail.senderValidation.enabled }}
+  # === Sender Validation (custom sender-validation plugin) ===
+  # IMPORTANT: Only validates OUTBOUND (relaying) connections!
+  # Inbound mail (bounces, FBL, external senders) is NOT filtered - anyone can send to us.
+  sender_validation.ini: |
+    [main]
+    enabled=true
+    ; Check From header matches MAIL FROM domain
+    check_from_header={{ .Values.mail.senderValidation.checkFromHeader | default true }}
+
+  # Whitelist: domains/addresses allowed to send through this relay
+  # STRICT MODE: If allowedFrom is specified, ONLY those are allowed (mail.domains is ignored)
+  sender_validation.whitelist: |
+    {{- if .Values.mail.senderValidation.allowedFrom }}
+    ; Explicit allowedFrom list (strict mode - mail.domains ignored)
+    {{- range .Values.mail.senderValidation.allowedFrom }}
+    {{- if not (hasPrefix "/" .) }}
+    {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- else }}
+    ; Default: all mail.domains are allowed
+    {{- range .Values.mail.domains }}
+    {{ .name }}
+    {{- end }}
+    {{- end }}
+
+  {{- $hasWhitelistRegex := false }}
+  {{- range .Values.mail.senderValidation.allowedFrom }}
+  {{- if hasPrefix "/" . }}
+  {{- $hasWhitelistRegex = true }}
+  {{- end }}
+  {{- end }}
+  {{- if $hasWhitelistRegex }}
+  # Whitelist regex patterns
+  sender_validation.whitelist_regex: |
+    {{- range .Values.mail.senderValidation.allowedFrom }}
+    {{- if hasPrefix "/" . }}
+    {{ trimPrefix "/" . | trimSuffix "/" }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.mail.senderValidation.forbiddenFrom }}
+  # Blacklist: forbidden senders (checked first, blocks even if in whitelist)
+  sender_validation.blacklist: |
+    {{- range .Values.mail.senderValidation.forbiddenFrom }}
+    {{- if not (hasPrefix "/" .) }}
+    {{ . }}
+    {{- end }}
+    {{- end }}
+
+  {{- $hasBlacklistRegex := false }}
+  {{- range .Values.mail.senderValidation.forbiddenFrom }}
+  {{- if hasPrefix "/" . }}
+  {{- $hasBlacklistRegex = true }}
+  {{- end }}
+  {{- end }}
+  {{- if $hasBlacklistRegex }}
+  # Blacklist regex patterns
+  sender_validation.blacklist_regex: |
+    {{- range .Values.mail.senderValidation.forbiddenFrom }}
+    {{- if hasPrefix "/" . }}
+    {{ trimPrefix "/" . | trimSuffix "/" }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+
+  {{- if and .Values.inbound.enabled .Values.inbound.security.spf.enabled }}
+  # === SPF Verification (haraka-plugin-spf) ===
+  spf.ini: |
+    [main]
+    lookup_timeout=29
+
+    [relay]
+    ; For relayed mail, check SPF from our perspective
+    context=myself
+
+    [skip]
+    ; Don't check SPF for authenticated connections
+    auth=true
+    ; Skip for connections from trusted relay IPs
+    relaying=true
+
+    [deny]
+    ; Reject mail failing HELO SPF
+    helo_fail=false
+    ; Reject mail failing MAIL FROM SPF (hard fail: -all)
+    mfrom_fail={{ .Values.inbound.security.spf.rejectFail | default false }}
+    ; Reject softfail (~all)
+    mfrom_softfail={{ .Values.inbound.security.spf.rejectSoftfail | default false }}
+
+    [defer]
+    ; Defer on temporary DNS errors
+    mfrom_temperror=true
+  {{- end }}
+
+  {{- if and .Values.inbound.enabled .Values.inbound.security.dkim.enabled }}
+  # === DKIM Verification (haraka-plugin-dkim) ===
+  # Adds Authentication-Results header with DKIM verification results
+  # Note: dkim.ini [verify] section enables verification
+  # This is in addition to [sign] section for outbound signing
+  {{- end }}
+
+  {{- if and .Values.inbound.enabled .Values.inbound.security.dmarc.enabled }}
+  # === DMARC Verification (custom dmarc-verify plugin) ===
+  dmarc_verify.ini: |
+    [main]
+    enabled=true
+    ; Reject mail with DMARC p=reject policy
+    reject_on_fail={{ .Values.inbound.security.dmarc.rejectOnFail | default false }}
+    ; Add X-DMARC-Status: quarantine header for p=quarantine
+    quarantine_on_fail={{ .Values.inbound.security.dmarc.quarantineOnFail | default false }}
+  {{- end }}
+
+  {{- if or .Values.metrics.enabled .Values.dashboard.watch.enabled .Values.dashboard.logReader.enabled }}
+  # === HTTP Server (metrics/dashboard) ===
+  http.ini: |
+    [main]
+    listen=[::0]:{{ .Values.dashboard.port }}
+  {{- end }}
+
+  {{- if .Values.metrics.enabled }}
+  # === Prometheus Metrics ===
+  prometheus.json: |
+    {
+      "enabled": true,
+      "prefix": "haraka",
+      "default_labels": {
+        "hostname": "{{ .Values.mail.hostname }}",
+        "release": "{{ .Release.Name }}"
+      }
+    }
+  {{- end }}
+
+  {{- if .Values.dashboard.watch.enabled }}
+  # === Watch Dashboard ===
+  watch.ini: |
+    [main]
+    sampling={{ .Values.dashboard.watch.sampling }}
+    {{- if .Values.redis.enabled }}
+    [wss]
+    ; WebSocket via HTTP server
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.dashboard.logReader.enabled }}
+  # === Log Reader ===
+  log.reader.ini: |
+    [log]
+    file=/tmp/haraka.log
+  {{- end }}
+
+  {{- if .Values.redis.enabled }}
+  # === Redis Configuration ===
+  redis.ini: |
+    [server]
+    host={{ .Values.redis.host }}
+    port={{ .Values.redis.port }}
+    db={{ .Values.redis.db }}
+    {{- if .Values.redis.password }}
+    password={{ .Values.redis.password }}
+    {{- else if .Values.redis.existingSecret }}
+    ; Password from secret - must be substituted by entrypoint
+    password=${REDIS_PASSWORD}
+    {{- end }}
+
+    ; PubSub connection for Watch plugin (uses separate client)
+    [pubsub]
+    host={{ .Values.redis.host }}
+    port={{ .Values.redis.port }}
+    db={{ .Values.redis.db }}
+    {{- if .Values.redis.password }}
+    password={{ .Values.redis.password }}
+    {{- else if .Values.redis.existingSecret }}
+    password=${REDIS_PASSWORD}
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.inbound.enabled }}
+  {{- if .Values.inbound.bounce.enabled }}
+  # === Bounce Processing ===
+  bounce.ini: |
+    [check]
+    ; Validate incoming bounces
+    single_recipient=true
+    empty_return_path=true
+    bad_rcpt=true
+
+    [reject]
+    ; Reject invalid bounces
+    single_recipient=false
+    empty_return_path=false
+    bad_rcpt=false
+  {{- end }}
+  {{- end }}
+
+  # === Outbound Configuration ===
+  outbound.ini: |
+    [main]
+    concurrency_max={{ .Values.haraka.concurrency }}
+    enable_tls=true
+    received_header=disabled
+    ; IP version preference (default=prefer IPv6, v4=IPv4 first, v6=IPv6 first)
+    inet_prefer={{ .Values.haraka.inetPrefer | default "v4" }}
+    {{- if not .Values.mail.relay.enabled }}
+    ; Direct delivery to recipient MX
+    {{- end }}
+
+    {{- if .Values.rateLimit.enabled }}
+    ; === Per-Domain Delivery Shaping ===
+    ; Slow down delivery to major providers to build reputation
+
+    {{- /* Gmail */ -}}
+    {{- if (index .Values.rateLimit.domains "gmail.com").enabled }}
+    [domain.gmail.com]
+    max_connections={{ (index .Values.rateLimit.domains "gmail.com").maxConnections }}
+    {{- end }}
+
+    {{- if (index .Values.rateLimit.domains "googlemail.com").enabled }}
+    [domain.googlemail.com]
+    max_connections={{ (index .Values.rateLimit.domains "googlemail.com").maxConnections }}
+    {{- end }}
+
+    {{- /* Microsoft */ -}}
+    {{- if (index .Values.rateLimit.domains "outlook.com").enabled }}
+    [domain.outlook.com]
+    max_connections={{ (index .Values.rateLimit.domains "outlook.com").maxConnections }}
+    {{- end }}
+
+    {{- if (index .Values.rateLimit.domains "hotmail.com").enabled }}
+    [domain.hotmail.com]
+    max_connections={{ (index .Values.rateLimit.domains "hotmail.com").maxConnections }}
+    {{- end }}
+
+    {{- if (index .Values.rateLimit.domains "live.com").enabled }}
+    [domain.live.com]
+    max_connections={{ (index .Values.rateLimit.domains "live.com").maxConnections }}
+    {{- end }}
+
+    {{- /* Yahoo */ -}}
+    {{- if (index .Values.rateLimit.domains "yahoo.com").enabled }}
+    [domain.yahoo.com]
+    max_connections={{ (index .Values.rateLimit.domains "yahoo.com").maxConnections }}
+    {{- end }}
+
+    {{- /* Custom domains */ -}}
+    {{- range $domain, $config := .Values.rateLimit.customDomains }}
+    {{- if $config.maxConnections }}
+    [domain.{{ $domain }}]
+    max_connections={{ $config.maxConnections }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+  {{- if .Values.mail.relay.enabled }}
+  # === Relay/Smarthost Configuration ===
+  smtp_forward.ini: |
+    host={{ .Values.mail.relay.host }}
+    port={{ .Values.mail.relay.port }}
+    enable_tls={{ .Values.mail.relay.tls }}
+    {{- if .Values.mail.relay.auth.enabled }}
+    auth_type=plain
+    {{- if .Values.mail.relay.auth.existingSecret }}
+    ; Credentials from secret - injected via environment
+    auth_user=${RELAY_AUTH_USER}
+    auth_pass=${RELAY_AUTH_PASS}
+    {{- else }}
+    auth_user={{ .Values.mail.relay.auth.username }}
+    auth_pass={{ .Values.mail.relay.auth.password }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+
+  # === Relay Authorization ===
+  relay.ini: |
+    [relay]
+    ; Only allow relay from trusted networks
+    all=false
+
+  relay_acl_allow: |
+    {{- range .Values.mail.trustedNetworks }}
+    {{ . }}
+    {{- end }}
+
+  # === DKIM Signing (haraka-plugin-dkim) ===
+  # Keys are auto-discovered from /app/config/dkim/${domain}/ directories
+  # Each directory contains: selector, private, public files
+  {{- if .Values.dkim.enabled }}
+  dkim.ini: |
+    [sign]
+    enabled=true
+    headers=from:to:subject:date:message-id
+    ; Canonicalization: relaxed/relaxed is more tolerant to minor modifications
+    ; (whitespace normalization in headers and body)
+    c=relaxed/relaxed
+
+    {{- if and .Values.inbound.enabled .Values.inbound.security.dkim.enabled }}
+    [verify]
+    ; Enable DKIM signature verification on inbound mail
+    enabled=true
+    ; Add Authentication-Results header
+    {{- end }}
+  {{- end }}
+
+  # === Inbound Recipient Validation ===
+  # Controls mail acceptance for our domains:
+  # - When enabled=true: accepts bounce+*, fbl@, postmaster@, abuse@
+  # - When enabled=false: rejects ALL mail to our domains (relay-only mode)
+  rcpt_to.inbound.ini: |
+    [main]
+    enabled={{ .Values.inbound.enabled }}
+    bounce_prefix={{ .Values.inbound.bounce.verpPrefix | default "bounce" | trimSuffix "+" }}
+
+    [domains]
+    ; Domains we control (accept inbound when enabled, reject when disabled)
+    {{ .Values.mail.hostname }}=true
+    {{- range .Values.mail.domains }}
+    {{ .name }}=true
+    {{- end }}
+
+    [recipients]
+    ; Static recipients to accept (only when enabled=true)
+    {{- if .Values.inbound.enabled }}
+    {{- range .Values.inbound.recipients }}
+    {{- if not (hasSuffix "+" .) }}
+    {{ . }}=true
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+  {{- if .Values.inbound.enabled }}
+  # === Outbound Headers (VERP + Tracking) ===
+  # Adds Return-Path with message ID for bounce correlation
+  outbound_headers.ini: |
+    [main]
+    enabled=true
+    ; Header to read client message ID from
+    client_id_header={{ .Values.inbound.clientIdHeader | default "X-Message-ID" }}
+    ; Fallback domain for VERP bounce addresses
+    bounce_domain={{ .Values.mail.hostname }}
+    ; Prefix for VERP addresses (bounce+{ts}-{hmac}-{id}@domain)
+    bounce_prefix={{ .Values.inbound.bounce.verpPrefix | default "bounce" | trimSuffix "+" }}
+    ; Add Feedback-ID header for Gmail FBL
+    add_feedback_id=true
+    ; Tag for Feedback-ID
+    feedback_id_tag=mail-relay
+    ; Use Haraka queue_id if client header not present
+    fallback_to_queue_id=true
+    ; Use sender's domain for bounce if it's in allowed list
+    use_sender_domain={{ .Values.inbound.bounce.useSenderDomain | default true }}
+    ; HMAC secret for VERP address protection (auto-generated if empty)
+    {{- if .Values.inbound.bounce.hmacSecret }}
+    hmac_secret={{ .Values.inbound.bounce.hmacSecret }}
+    {{- else if .Values.inbound.bounce.hmacSecretRef }}
+    ; HMAC secret loaded from Kubernetes secret
+    {{- end }}
+    ; Maximum bounce age in days
+    bounce_max_age_days={{ .Values.inbound.bounce.maxAgeDays | default 7 }}
+
+    [domains]
+    ; Domains allowed for bounce Return-Path (uses sender domain if match)
+    {{ .Values.mail.hostname }}=true
+    {{- range .Values.mail.domains }}
+    {{ .name }}=true
+    {{- end }}
+
+  # === Inbound Message Handler ===
+  # Parses DSN/ARF and sends webhooks
+  inbound_handler.ini: |
+    [main]
+    enabled=true
+    ; Require HMAC validation for bounces (rejects forged bounces if true)
+    require_hmac={{ .Values.inbound.bounce.requireHmac | default true }}
+    ; HMAC secret (reads from outbound_headers.ini if not set here)
+    {{- if .Values.inbound.bounce.hmacSecret }}
+    hmac_secret={{ .Values.inbound.bounce.hmacSecret }}
+    {{- end }}
+    ; Maximum bounce age in days
+    bounce_max_age_days={{ .Values.inbound.bounce.maxAgeDays | default 7 }}
+
+    [webhook]
+    ; Uses webhook.ini endpoints if not specified
+    timeout={{ .Values.webhooks.timeout | default 5000 }}
+  {{- end }}
+
+  # === Message Limits ===
+  limit.ini: |
+    [main]
+    ; Max message size in bytes
+    max_bytes={{ .Values.mail.messageSizeLimit }}
+    ; Max recipients per message
+    max_recipients=100
+    ; Max concurrent connections per IP
+    max_connections=50
+
+    {{- if .Values.rateLimit.enabled }}
+    ; === Outbound Rate Limiting (Delivery Shaping) ===
+    ; Prevents reputation damage with major email providers
+    ; Format: outbound::domain=count/interval
+
+    {{- /* Gmail */ -}}
+    {{- if (index .Values.rateLimit.domains "gmail.com").enabled }}
+    outbound::gmail.com={{ (index .Values.rateLimit.domains "gmail.com").rate }}
+    {{- end }}
+    {{- if (index .Values.rateLimit.domains "googlemail.com").enabled }}
+    outbound::googlemail.com={{ (index .Values.rateLimit.domains "googlemail.com").rate }}
+    {{- end }}
+
+    {{- /* Microsoft */ -}}
+    {{- if (index .Values.rateLimit.domains "outlook.com").enabled }}
+    outbound::outlook.com={{ (index .Values.rateLimit.domains "outlook.com").rate }}
+    {{- end }}
+    {{- if (index .Values.rateLimit.domains "hotmail.com").enabled }}
+    outbound::hotmail.com={{ (index .Values.rateLimit.domains "hotmail.com").rate }}
+    {{- end }}
+    {{- if (index .Values.rateLimit.domains "live.com").enabled }}
+    outbound::live.com={{ (index .Values.rateLimit.domains "live.com").rate }}
+    {{- end }}
+
+    {{- /* Yahoo */ -}}
+    {{- if (index .Values.rateLimit.domains "yahoo.com").enabled }}
+    outbound::yahoo.com={{ (index .Values.rateLimit.domains "yahoo.com").rate }}
+    {{- end }}
+
+    {{- /* Custom domains */ -}}
+    {{- range $domain, $config := .Values.rateLimit.customDomains }}
+    {{- if $config.rate }}
+    outbound::{{ $domain }}={{ $config.rate }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+  # === Enabled Plugins ===
+  plugins: |
+    # Core functionality
+    relay
+    {{- if .Values.dkim.enabled }}
+    dkim
+    {{- end }}
+    limit
+
+    {{- if .Values.auth.enabled }}
+    # SMTP Authentication (built-in auth/flat_file)
+    auth/flat_file
+    {{- end }}
+
+    {{- if .Values.mail.senderValidation.enabled }}
+    # Sender validation for OUTBOUND mail (whitelist/blacklist)
+    sender-validation
+    {{- end }}
+
+    {{- if and .Values.inbound.enabled .Values.inbound.security.spf.enabled }}
+    # SPF verification (built-in haraka-plugin-spf)
+    spf
+    {{- end }}
+
+    {{- if and .Values.inbound.enabled .Values.inbound.security.dmarc.enabled }}
+    # DMARC verification (custom plugin - checks SPF/DKIM alignment)
+    dmarc-verify
+    {{- end }}
+
+    # Inbound/relay recipient control (always loaded)
+    # - When inbound.enabled=true: accepts bounce+*, fbl@, postmaster@, abuse@
+    # - When inbound.enabled=false: rejects ALL mail to our domains (relay-only)
+    rcpt-to-inbound
+
+    {{- if .Values.inbound.enabled }}
+    # Outbound tracking headers (VERP Return-Path, X-Haraka-MsgID)
+    outbound-headers
+
+    # Inbound message handler (parses DSN/ARF, sends webhooks)
+    inbound-handler
+    {{- if .Values.inbound.bounce.enabled }}
+    bounce
+    {{- end }}
+    {{- end }}
+
+    # Queue/Delivery
+    {{- if .Values.mail.relay.enabled }}
+    smtp_forward
+    {{- end }}
+
+    {{- if .Values.webhooks.enabled }}
+    # Delivery event webhooks
+    webhook
+    {{- end }}
+
+    {{- if .Values.adaptiveRate.enabled }}
+    # Adaptive rate limiting (dynamic backoff/recovery)
+    adaptive-rate
+    {{- end }}
+
+    {{- if .Values.redis.enabled }}
+    # Redis support
+    redis
+    {{- end }}
+
+    {{- if .Values.dashboard.watch.enabled }}
+    # Real-time monitoring dashboard
+    watch
+    {{- end }}
+
+    {{- if .Values.dashboard.logReader.enabled }}
+    # Log viewer
+    log-reader
+    {{- end }}
+
+    {{- if .Values.metrics.enabled }}
+    # Prometheus metrics (symlinked from @mailprotector/haraka-plugin-prometheus)
+    haraka-plugin-prometheus
+    {{- end }}
+
+    # Additional plugins
+    {{- range .Values.haraka.plugins }}
+    {{ . }}
+    {{- end }}
+
+  # === Logging ===
+  log.ini: |
+    [main]
+    level=debug
+    timestamps=true
+    format=default
+
+  {{- if .Values.webhooks.enabled }}
+  # === Webhook Plugin Config ===
+  webhook.ini: |
+    [main]
+    enabled=true
+    timeout={{ .Values.webhooks.timeout | default 5000 }}
+    retry={{ .Values.webhooks.retry | default true }}
+    max_retries={{ .Values.webhooks.maxRetries | default 3 }}
+    {{- range $index, $endpoint := .Values.webhooks.endpoints }}
+
+    [endpoint.{{ $endpoint.name | default (printf "endpoint-%d" $index) }}]
+    url={{ $endpoint.url }}
+    events={{ $endpoint.events | default (list "delivered" "bounced" "deferred") | join "," }}
+    {{- range $key, $value := $endpoint.headers }}
+    header_{{ $key }}={{ $value }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.adaptiveRate.enabled }}
+  # === Adaptive Rate Limiting (Dynamic Backoff/Recovery) ===
+  adaptive-rate.ini: |
+    [main]
+    enabled=true
+    metrics_port={{ .Values.adaptiveRate.metricsPort }}
+    min_delay={{ .Values.adaptiveRate.defaults.minDelay }}
+    max_delay={{ .Values.adaptiveRate.defaults.maxDelay }}
+    initial_delay={{ .Values.adaptiveRate.defaults.initialDelay }}
+    backoff_multiplier={{ .Values.adaptiveRate.defaults.backoffMultiplier }}
+    recovery_rate={{ .Values.adaptiveRate.defaults.recoveryRate }}
+    success_threshold={{ .Values.adaptiveRate.defaults.successThreshold }}
+
+    [domains]
+    {{- /* Gmail */ -}}
+    {{- if (index .Values.adaptiveRate.domains "gmail.com").enabled }}
+    gmail.com=true
+    {{- end }}
+    {{- if (index .Values.adaptiveRate.domains "googlemail.com").enabled }}
+    googlemail.com=true
+    {{- end }}
+    {{- /* Microsoft */ -}}
+    {{- if (index .Values.adaptiveRate.domains "outlook.com").enabled }}
+    outlook.com=true
+    {{- end }}
+    {{- if (index .Values.adaptiveRate.domains "hotmail.com").enabled }}
+    hotmail.com=true
+    {{- end }}
+    {{- if (index .Values.adaptiveRate.domains "live.com").enabled }}
+    live.com=true
+    {{- end }}
+    {{- /* Yahoo */ -}}
+    {{- if (index .Values.adaptiveRate.domains "yahoo.com").enabled }}
+    yahoo.com=true
+    {{- end }}
+    {{- /* Custom domains */ -}}
+    {{- range $domain, $config := .Values.adaptiveRate.customDomains }}
+    {{- if $config.enabled }}
+    {{- if eq $domain "*" }}
+    __all__=true
+    {{- else }}
+    {{ $domain }}=true
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+    {{- /* Per-domain overrides */ -}}
+    {{- if (index .Values.adaptiveRate.domains "gmail.com").enabled }}
+    [gmail.com]
+    min_delay={{ (index .Values.adaptiveRate.domains "gmail.com").minDelay }}
+    max_delay={{ (index .Values.adaptiveRate.domains "gmail.com").maxDelay }}
+    initial_delay={{ (index .Values.adaptiveRate.domains "gmail.com").initialDelay }}
+    {{- with (index .Values.adaptiveRate.domains "gmail.com").backoffMultiplier }}
+    backoff_multiplier={{ . }}
+    {{- end }}
+    {{- with (index .Values.adaptiveRate.domains "gmail.com").recoveryRate }}
+    recovery_rate={{ . }}
+    {{- end }}
+    {{- with (index .Values.adaptiveRate.domains "gmail.com").successThreshold }}
+    success_threshold={{ . }}
+    {{- end }}
+    {{- end }}
+
+    {{- if (index .Values.adaptiveRate.domains "googlemail.com").enabled }}
+    [googlemail.com]
+    min_delay={{ (index .Values.adaptiveRate.domains "googlemail.com").minDelay }}
+    max_delay={{ (index .Values.adaptiveRate.domains "googlemail.com").maxDelay }}
+    initial_delay={{ (index .Values.adaptiveRate.domains "googlemail.com").initialDelay }}
+    {{- with (index .Values.adaptiveRate.domains "googlemail.com").backoffMultiplier }}
+    backoff_multiplier={{ . }}
+    {{- end }}
+    {{- with (index .Values.adaptiveRate.domains "googlemail.com").recoveryRate }}
+    recovery_rate={{ . }}
+    {{- end }}
+    {{- with (index .Values.adaptiveRate.domains "googlemail.com").successThreshold }}
+    success_threshold={{ . }}
+    {{- end }}
+    {{- end }}
+
+    {{- if (index .Values.adaptiveRate.domains "outlook.com").enabled }}
+    [outlook.com]
+    min_delay={{ (index .Values.adaptiveRate.domains "outlook.com").minDelay }}
+    max_delay={{ (index .Values.adaptiveRate.domains "outlook.com").maxDelay }}
+    initial_delay={{ (index .Values.adaptiveRate.domains "outlook.com").initialDelay }}
+    {{- with (index .Values.adaptiveRate.domains "outlook.com").backoffMultiplier }}
+    backoff_multiplier={{ . }}
+    {{- end }}
+    {{- with (index .Values.adaptiveRate.domains "outlook.com").recoveryRate }}
+    recovery_rate={{ . }}
+    {{- end }}
+    {{- with (index .Values.adaptiveRate.domains "outlook.com").successThreshold }}
+    success_threshold={{ . }}
+    {{- end }}
+    {{- end }}
+
+    {{- if (index .Values.adaptiveRate.domains "hotmail.com").enabled }}
+    [hotmail.com]
+    min_delay={{ (index .Values.adaptiveRate.domains "hotmail.com").minDelay }}
+    max_delay={{ (index .Values.adaptiveRate.domains "hotmail.com").maxDelay }}
+    initial_delay={{ (index .Values.adaptiveRate.domains "hotmail.com").initialDelay }}
+    {{- end }}
+
+    {{- if (index .Values.adaptiveRate.domains "live.com").enabled }}
+    [live.com]
+    min_delay={{ (index .Values.adaptiveRate.domains "live.com").minDelay }}
+    max_delay={{ (index .Values.adaptiveRate.domains "live.com").maxDelay }}
+    initial_delay={{ (index .Values.adaptiveRate.domains "live.com").initialDelay }}
+    {{- end }}
+
+    {{- if (index .Values.adaptiveRate.domains "yahoo.com").enabled }}
+    [yahoo.com]
+    min_delay={{ (index .Values.adaptiveRate.domains "yahoo.com").minDelay }}
+    max_delay={{ (index .Values.adaptiveRate.domains "yahoo.com").maxDelay }}
+    initial_delay={{ (index .Values.adaptiveRate.domains "yahoo.com").initialDelay }}
+    {{- end }}
+
+    {{- /* Custom domain overrides */ -}}
+    {{- range $domain, $config := .Values.adaptiveRate.customDomains }}
+    {{- if $config.enabled }}
+    {{- if eq $domain "*" }}
+    [__all__]
+    {{- else }}
+    [{{ $domain }}]
+    {{- end }}
+    {{- with $config.minDelay }}
+    min_delay={{ . }}
+    {{- end }}
+    {{- with $config.maxDelay }}
+    max_delay={{ . }}
+    {{- end }}
+    {{- with $config.initialDelay }}
+    initial_delay={{ . }}
+    {{- end }}
+    {{- with $config.backoffMultiplier }}
+    backoff_multiplier={{ . }}
+    {{- end }}
+    {{- with $config.recoveryRate }}
+    recovery_rate={{ . }}
+    {{- end }}
+    {{- with $config.successThreshold }}
+    success_threshold={{ . }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}

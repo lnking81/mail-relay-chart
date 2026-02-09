@@ -1,56 +1,43 @@
+{{- if .Values.serviceAccount.create }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "mail-relay.fullname" . }}-manager
+  name: {{ include "mail-relay.fullname" . }}
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-2"
-    "helm.sh/hook-delete-policy": before-hook-creation
 rules:
-# Always include basic secret management for DKIM and other needs
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list", "create", "update", "patch", "delete"]
-{{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
-# External DNS management permissions
-- apiGroups: [""]
-  resources: ["services"]
-  verbs: ["get", "list", "create", "update", "patch", "delete"]
-- apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["get", "list", "create", "update", "patch"]
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list"]
-- apiGroups: [""]
-  resources: ["pods/exec"]
-  verbs: ["create"]
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  verbs: ["get", "list"]
-- apiGroups: ["externaldns.k8s.io"]
-  resources: ["dnsendpoints"]
-  verbs: ["get", "list", "create", "update", "patch", "delete"]
-{{- end }}
+  # DKIM secret management
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+  {{- if .Values.dns.enabled }}
+  # DNS management - service status for IP detection
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+
+  {{- if .Values.dns.externalDns.enabled }}
+  # DNSEndpoint management for external-dns
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: ["dnsendpoints"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  {{- end }}
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "mail-relay.fullname" . }}-manager
+  name: {{ include "mail-relay.fullname" . }}
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-2"
-    "helm.sh/hook-delete-policy": before-hook-creation
-subjects:
-- kind: ServiceAccount
-  name: {{ include "mail-relay.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
 roleRef:
-  kind: Role
-  name: {{ include "mail-relay.fullname" . }}-manager
   apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "mail-relay.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "mail-relay.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

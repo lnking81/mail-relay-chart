@@ -1,0 +1,20 @@
+{
+  "name": "dmarc-verify",
+  "version": "1.0.0",
+  "description": "DMARC verification plugin for Haraka - checks SPF/DKIM alignment with From header domain",
+  "main": "index.js",
+  "author": "mail-relay-chart",
+  "license": "MIT",
+  "keywords": [
+    "haraka",
+    "haraka-plugin",
+    "dmarc",
+    "email",
+    "spf",
+    "dkim"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lnking81/mail-relay-chart"
+  }
+}

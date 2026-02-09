@@ -1,0 +1,794 @@
+{{- if and .Values.metrics.enabled .Values.dashboard.grafana.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mail-relay.fullname" . }}-grafana-dashboard
+  labels:
+    {{- include "mail-relay.labels" . | nindent 4 }}
+    {{- with .Values.dashboard.grafana.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  haraka-mail-relay.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 1,
+          "panels": [],
+          "title": "Overview",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+          "id": 2,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_queue_ok_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+            "legendFormat": "Messages",
+            "refId": "A"
+          }],
+          "title": "Messages",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+          "id": 3,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_bounce_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])) / clamp_min(sum(increase(haraka_queue_ok_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])), 1) * 100",
+            "legendFormat": "Bounce Rate",
+            "refId": "A"
+          }],
+          "title": "Bounce Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+          "id": 4,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_connect_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+            "legendFormat": "Connections",
+            "refId": "A"
+          }],
+          "title": "Connections",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+          "id": 5,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_delivered_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+            "legendFormat": "Delivered",
+            "refId": "A"
+          }],
+          "title": "Delivered",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+          "id": 6,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_bounce_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+            "legendFormat": "Bounced",
+            "refId": "A"
+          }],
+          "title": "Bounced",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+          "id": 7,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_deferred_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+            "legendFormat": "Deferred",
+            "refId": "A"
+          }],
+          "title": "Deferred",
+          "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "id": 10,
+          "panels": [],
+          "title": "Message Throughput",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "id": 11,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (release) (rate(haraka_queue_ok_total{namespace=~\"$namespace\", release=~\"$release\"}[5m])) * 60",
+              "legendFormat": "{{`{{release}}`}} - Queued",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (release) (rate(haraka_delivered_total{namespace=~\"$namespace\", release=~\"$release\"}[5m])) * 60",
+              "legendFormat": "{{`{{release}}`}} - Delivered",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (release) (rate(haraka_bounce_total{namespace=~\"$namespace\", release=~\"$release\"}[5m])) * 60",
+              "legendFormat": "{{`{{release}}`}} - Bounced",
+              "refId": "C"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (release) (rate(haraka_deferred_total{namespace=~\"$namespace\", release=~\"$release\"}[5m])) * 60",
+              "legendFormat": "{{`{{release}}`}} - Deferred",
+              "refId": "D"
+            }
+          ],
+          "title": "Messages per Minute",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "id": 12,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (release) (rate(haraka_connect_total{namespace=~\"$namespace\", release=~\"$release\"}[5m])) * 60",
+              "legendFormat": "{{`{{release}}`}} - Connections/min",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (release) (rate(haraka_deny_total{namespace=~\"$namespace\", release=~\"$release\"}[5m])) * 60",
+              "legendFormat": "{{`{{release}}`}} - Denied/min",
+              "refId": "B"
+            }
+          ],
+          "title": "Connections",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+          "id": 20,
+          "panels": [],
+          "title": "System Resources",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+          "id": 21,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "haraka_nodejs_heap_size_used_bytes{namespace=~\"$namespace\", release=~\"$release\"}",
+              "legendFormat": "{{`{{release}}`}} - Heap Used",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "haraka_nodejs_heap_size_total_bytes{namespace=~\"$namespace\", release=~\"$release\"}",
+              "legendFormat": "{{`{{release}}`}} - Heap Total",
+              "refId": "B"
+            }
+          ],
+          "title": "Memory Usage",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+          "id": 22,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "haraka_nodejs_eventloop_lag_seconds{namespace=~\"$namespace\", release=~\"$release\"}",
+              "legendFormat": "{{`{{release}}`}} - Event Loop Lag",
+              "refId": "A"
+            }
+          ],
+          "title": "Event Loop Lag",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+          "id": 40,
+          "panels": [],
+          "title": "Adaptive Rate Limiting",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Current delay applied per destination domain. Higher = slower delivery.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 5000 },
+                { "color": "orange", "value": 15000 },
+                { "color": "red", "value": 30000 }
+              ]},
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+          "id": 41,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "topk(10, haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"})",
+            "legendFormat": "{{`{{domain}}`}}",
+            "refId": "A"
+          }],
+          "title": "Current Delay by Domain",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Domains currently experiencing delivery issues",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "orange", "value": 3 },
+                { "color": "red", "value": 5 }
+              ]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+          "id": 42,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "topk(10, haraka_adaptive_rate_consecutive_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0)",
+            "legendFormat": "{{`{{domain}}`}}",
+            "refId": "A"
+          }],
+          "title": "Consecutive Failures by Domain",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Explicit rate limit responses (421, 4.7.28) in the last hour",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 10 }
+              ]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+          "id": 43,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "topk(10, increase(haraka_adaptive_rate_rate_limited_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]))",
+            "legendFormat": "{{`{{domain}}`}}",
+            "refId": "A"
+          }],
+          "title": "Rate Limited (1h)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "id": 44,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"}",
+            "legendFormat": "{{`{{domain}}`}}",
+            "refId": "A"
+          }],
+          "title": "Delay Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*Delivered" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byRegexp", "options": ".*Deferred" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byRegexp", "options": ".*Bounced" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "id": 45,
+          "options": {
+            "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (domain) (increase(haraka_adaptive_rate_deliveries_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]))",
+              "legendFormat": "{{`{{domain}}`}} - Delivered",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (domain) (increase(haraka_adaptive_rate_deferrals_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]))",
+              "legendFormat": "{{`{{domain}}`}} - Deferred",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (domain) (increase(haraka_adaptive_rate_bounces_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]))",
+              "legendFormat": "{{`{{domain}}`}} - Bounced",
+              "refId": "C"
+            }
+          ],
+          "title": "Delivery Status by Domain (5m)",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+          "id": 30,
+          "panels": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "fieldConfig": {
+                "defaults": {
+                  "color": { "mode": "thresholds" },
+                  "mappings": [],
+                  "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                  "unit": "short"
+                },
+                "overrides": []
+              },
+              "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+              "id": 31,
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+              },
+              "pluginVersion": "10.0.0",
+              "targets": [{
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "expr": "count(haraka_connect_total{namespace=~\"$namespace\", release=~\"$release\"}) by (release, namespace, hostname)",
+                "format": "table",
+                "instant": true,
+                "legendFormat": "__auto",
+                "refId": "A"
+              }],
+              "title": "Active Instances",
+              "transformations": [
+                {
+                  "id": "organize",
+                  "options": {
+                    "excludeByName": { "Time": true, "Value": true },
+                    "indexByName": {},
+                    "renameByName": { "hostname": "Hostname", "namespace": "Namespace", "release": "Release" }
+                  }
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "title": "Instances",
+          "type": "row"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["mail", "haraka", "smtp"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "label": "Datasource",
+            "multi": false,
+            "name": "datasource",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false,
+            "type": "datasource"
+          },
+          {
+            "current": {},
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "definition": "label_values(haraka_connect_total, namespace)",
+            "hide": 0,
+            "includeAll": true,
+            "label": "Namespace",
+            "multi": true,
+            "name": "namespace",
+            "options": [],
+            "query": { "query": "label_values(haraka_connect_total, namespace)", "refId": "namespace" },
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1,
+            "type": "query"
+          },
+          {
+            "current": {},
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "definition": "label_values(haraka_connect_total{namespace=~\"$namespace\"}, release)",
+            "hide": 0,
+            "includeAll": true,
+            "label": "Release",
+            "multi": true,
+            "name": "release",
+            "options": [],
+            "query": { "query": "label_values(haraka_connect_total{namespace=~\"$namespace\"}, release)", "refId": "release" },
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1,
+            "type": "query"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "timepicker": {},
+      "timezone": "",
+      "title": "Haraka Mail Relay",
+      "uid": "haraka-mail-relay",
+      "version": 1,
+      "weekStart": ""
+    }
+{{- end }}

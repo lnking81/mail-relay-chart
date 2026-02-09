@@ -1,17 +1,17 @@
-{{- if .Values.persistence.enabled }}
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "mail-relay.fullname" . }}-data
+  name: {{ include "mail-relay.fullname" . }}
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - {{ .Values.persistence.accessMode }}
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.persistence.size }}
-  {{- if .Values.persistence.storageClass }}
-  storageClassName: {{ .Values.persistence.storageClass }}
-  {{- end }}
 {{- end }}

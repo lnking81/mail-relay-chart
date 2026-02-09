@@ -14,17 +14,16 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/entrypoint: {{ include (print $.Template.BasePath "/configmap-entrypoint.yaml") . | sha256sum }}
-        checksum/postfix-config: {{ include (print $.Template.BasePath "/configmap-postfix.yaml") . | sha256sum }}
-        checksum/supervisor-config: {{ include (print $.Template.BasePath "/configmap-supervisor.yaml") . | sha256sum }}
-        {{- if .Values.dkim.enabled }}
-        checksum/opendkim-config: {{ include (print $.Template.BasePath "/configmap-opendkim.yaml") . | sha256sum }}
-        {{- end }}
+        checksum/haraka-config: {{ include (print $.Template.BasePath "/configmap-haraka.yaml") . | sha256sum }}
+        checksum/scripts: {{ include (print $.Template.BasePath "/configmap-scripts.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
         {{- include "mail-relay.selectorLabels" . | nindent 8 }}
+        {{- if .Values.podAntiAffinity.enabled }}
+        mail-relay/instance-group: {{ .Values.podAntiAffinity.instanceGroup | default "mail-relay" | quote }}
+        {{- end }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -34,228 +33,248 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "mail-relay.serviceAccountName" . }}
+      {{- if .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      {{- if or .Values.dkim.enabled .Values.dns.enabled }}
       initContainers:
-        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
-        - name: ip-detector
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          image: curlimages/curl:latest
+        {{- if .Values.dkim.enabled }}
+        # DKIM Init Container - generates keys if not exist
+        - name: dkim-init
+          image: bitnami/kubectl:latest
           imagePullPolicy: IfNotPresent
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              echo "Detecting external IP address..."
-
-              # Try multiple services to detect external IP
-              for service in "https://ifconfig.me/ip" "https://icanhazip.com" "https://ipv4.icanhazip.com"; do
-                echo "Trying $service..."
-                if IP=$(curl -s --connect-timeout 10 --max-time 30 "$service" 2>/dev/null); then
-                  if echo "$IP" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' >/dev/null; then
-                    echo "Detected external IP: $IP"
-                    echo "$IP" > /shared/external-ip
-                    echo "$(date): External IP detected as $IP" >> /shared/ip-detection.log
-                    exit 0
-                  fi
-                fi
-                echo "Failed to get valid IP from $service"
-              done
-
-              echo "ERROR: Could not detect external IP address"
-              echo "$(date): Failed to detect external IP" >> /shared/ip-detection.log
-              echo "unknown" > /shared/external-ip
-              exit 1
-          volumeMounts:
-            - name: shared-data
-              mountPath: /shared
-        {{- end }}
-      containers:
-        - name: {{ .Chart.Name }}
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/bash", "/scripts/init-dkim.sh"]
           env:
-            {{- if and .Values.mail.relayCredentials.enabled .Values.mail.relayCredentials.username .Values.mail.relayCredentials.password }}
-            - name: RELAY_CREDENTIALS_ENABLED
-              value: "true"
-            {{- else }}
-            - name: RELAY_CREDENTIALS_ENABLED
-              value: "false"
-            {{- end }}
-            {{- if and .Values.mail.senderAccess .Values.mail.senderAccess.enabled }}
-            - name: SENDER_ACCESS_ENABLED
-              value: "true"
-            {{- else }}
-            - name: SENDER_ACCESS_ENABLED
-              value: "false"
-            {{- end }}
-            {{- if .Values.dkim.enabled }}
-            - name: DKIM_ENABLED
-              value: "true"
-            {{- if .Values.dkim.autoGenerate }}
-            - name: DKIM_AUTO_GENERATE
-              value: "true"
-            - name: DKIM_KEY_SIZE
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KEY_SIZE
               value: "{{ .Values.dkim.keySize }}"
-            - name: DKIM_SELECTOR
-              value: "{{ (index .Values.mail.domains 0).dkimSelector | default "mail" }}"
-            - name: DKIM_DOMAINS
-              value: "{{ range $index, $domain := .Values.mail.domains }}{{ if $index }},{{ end }}{{ $domain.name }}{{ end }}"
-            {{- else }}
-            - name: DKIM_AUTO_GENERATE
-              value: "false"
+            - name: RELEASE_NAME
+              value: "{{ .Release.Name }}"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: dkim-keys
+              mountPath: /dkim
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        {{- end }}
+        {{- if .Values.dns.enabled }}
+        # DNS Init Container - detects IP, creates DNS, waits for propagation
+        - name: dns-init
+          image: {{ include "mail-relay.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "/app/dns_manager.py", "init"]
+          args:
+            - --wait-for-lb={{ .Values.dns.watcher.waitForLbTimeout }}
+            {{- if .Values.dns.waitForRecords.enabled }}
+            - --verify-timeout={{ .Values.dns.waitForRecords.timeout }}
             {{- end }}
-            {{- else }}
-            - name: DKIM_ENABLED
-              value: "false"
-            {{- end }}
-            {{- if .Values.persistence.enabled }}
-            - name: PERSISTENCE_ENABLED
-              value: "true"
-            {{- else }}
-            - name: PERSISTENCE_ENABLED
-              value: "false"
-            {{- end }}
+          env:
+            {{- include "mail-relay.dnsEnvVars" . | nindent 12 }}
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        {{- end }}
+      {{- end }}
+
+      containers:
+        - name: haraka
+          image: {{ include "mail-relay.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "/scripts/entrypoint.sh"]
           ports:
             - name: smtp
-              containerPort: {{ .Values.service.ports.smtp.port }}
+              containerPort: 25
               protocol: TCP
-          {{- if .Values.healthCheck.enabled }}
+            {{- if or .Values.metrics.enabled .Values.dashboard.watch.enabled .Values.dashboard.logReader.enabled }}
+            - name: http
+              containerPort: {{ .Values.dashboard.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.adaptiveRate.enabled }}
+            - name: rate-metrics
+              containerPort: {{ .Values.adaptiveRate.metricsPort }}
+              protocol: TCP
+            {{- end }}
+
           livenessProbe:
             exec:
               command:
-                - /bin/bash
+                - /bin/sh
                 - -c
-                - |
-                  # Check that all services managed by supervisord are running
-                  # If supervisorctl fails, supervisord is not running
-                  if ! supervisorctl status >/dev/null 2>&1; then
-                    echo "supervisord not running"
-                    exit 1
-                  fi
+                - "test ! -f /shared/kill-pod && nc -z localhost 25"
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
 
-                  # Check that all services are in RUNNING state
-                  if supervisorctl status | grep -v RUNNING | grep -q .; then
-                    echo "Some services are not running:"
-                    supervisorctl status | grep -v RUNNING
-                    exit 1
-                  else
-                    # All services are RUNNING
-                    exit 0
-                  fi
-            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
-            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
-            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
-            failureThreshold: {{ .Values.healthCheck.failureThreshold }}
           readinessProbe:
-            exec:
-              command:
-                - /bin/bash
-                - -c
-                - |
-                  # Check that all services managed by supervisord are running
-                  # If supervisorctl fails, supervisord is not running
-                  if ! supervisorctl status >/dev/null 2>&1; then
-                    echo "supervisord not running"
-                    exit 1
-                  fi
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
 
-                  # Check that all services are in RUNNING state
-                  if supervisorctl status | grep -v RUNNING | grep -q .; then
-                    echo "Some services are not running:"
-                    supervisorctl status | grep -v RUNNING
-                    exit 1
-                  else
-                    # Additional check: verify SMTP port is accepting connections
-                    if nc -z localhost {{ .Values.service.ports.smtp.port }}; then
-                      exit 0
-                    else
-                      echo "SMTP port not accepting connections"
-                      exit 1
-                    fi
-                  fi
-            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
-            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
-            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
-            successThreshold: {{ .Values.healthCheck.successThreshold }}
-          {{- end }}
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: HARAKA_HOSTNAME
+              value: {{ .Values.mail.hostname | quote }}
+            {{- if .Values.redis.enabled }}
+            {{- if .Values.redis.existingSecret }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecret }}
+                  key: password
+            {{- else if .Values.redis.password }}
+            - name: REDIS_PASSWORD
+              value: {{ .Values.redis.password | quote }}
+            {{- end }}
+            {{- end }}
+
           volumeMounts:
-            - name: entrypoint
-              mountPath: /usr/local/bin/entrypoint.sh
-              subPath: entrypoint.sh
-            - name: postfix-config
-              mountPath: /tmp/postfix-config
-            - name: supervisor-config
-              mountPath: /tmp/supervisor-config
+            - name: haraka-config
+              mountPath: /app/config-template
+              readOnly: true
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: config-workdir
+              mountPath: /app/config
             {{- if .Values.dkim.enabled }}
-            - name: opendkim-config
-              mountPath: /tmp/opendkim-config
-            {{- range $index, $domain := .Values.mail.domains }}
-            - name: dkim-{{ $domain.name | replace "." "-" }}
-              mountPath: /data/dkim-secrets/{{ $domain.name }}
+            - name: dkim-keys
+              mountPath: /app/config/dkim
               readOnly: true
             {{- end }}
+            {{- if .Values.dns.enabled }}
+            - name: shared
+              mountPath: /shared
+              readOnly: true
             {{- end }}
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /data
             {{- end }}
-            {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
-            - name: shared-data
+            - name: tmp
+              mountPath: /tmp
+
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+        {{- if and .Values.dns.enabled .Values.dns.watcher.enabled }}
+        # DNS Watcher Sidecar - monitors IP changes and updates DNS
+        - name: dns-watcher
+          image: {{ include "mail-relay.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "/app/dns_watcher.py"]
+          args:
+            - --interval={{ .Values.dns.watcher.interval }}
+            - --shared-dir=/shared
+          env:
+            {{- include "mail-relay.dnsEnvVars" . | nindent 12 }}
+          volumeMounts:
+            - name: shared
               mountPath: /shared
-            {{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        {{- end }}
+
+        {{- with .Values.sidecars }}
+        # Custom sidecars
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
       volumes:
-        {{- if and .Values.externalDns.enabled .Values.externalDns.autoManageDnsRecords }}
-        - name: shared-data
+        - name: haraka-config
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-haraka
+        - name: scripts
+          configMap:
+            name: {{ include "mail-relay.fullname" . }}-scripts
+            defaultMode: 0755
+        - name: config-workdir
+          emptyDir: {}
+        {{- if .Values.dns.enabled }}
+        - name: shared
           emptyDir: {}
         {{- end }}
-        - name: entrypoint
-          configMap:
-            name: {{ include "mail-relay.fullname" . }}-entrypoint
-            defaultMode: 0755
-        - name: postfix-config
-          configMap:
-            name: {{ include "mail-relay.fullname" . }}-postfix-config
-        - name: supervisor-config
-          configMap:
-            name: {{ include "mail-relay.fullname" . }}-supervisor-config
         {{- if .Values.dkim.enabled }}
-        - name: opendkim-config
-          configMap:
-            name: {{ include "mail-relay.fullname" . }}-opendkim-config
-        {{- range $index, $domain := .Values.mail.domains }}
-        - name: dkim-{{ $domain.name | replace "." "-" }}
-          secret:
-            secretName: {{ include "mail-relay.fullname" $ }}-dkim-{{ $domain.name | replace "." "-" }}
-            defaultMode: 0400
-        {{- end }}
+        - name: dkim-keys
+          emptyDir: {}
         {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data
-          {{- if .Values.persistence.existingClaim }}
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim }}
-          {{- else }}
-          persistentVolumeClaim:
-            claimName: {{ include "mail-relay.fullname" . }}-data
-          {{- end }}
-        {{- else }}
-        - name: data
-          emptyDir: {}
+            claimName: {{ .Values.persistence.existingClaim | default (include "mail-relay.fullname" .) }}
         {{- end }}
+        - name: tmp
+          emptyDir: {}
+
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- if or .Values.affinity .Values.podAntiAffinity.enabled }}
       affinity:
+        {{- with .Values.affinity }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.podAntiAffinity.enabled }}
+        podAntiAffinity:
+          {{- if eq .Values.podAntiAffinity.type "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  mail-relay/instance-group: {{ .Values.podAntiAffinity.instanceGroup | default "mail-relay" | quote }}
+              topologyKey: {{ .Values.podAntiAffinity.topologyKey | quote }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    mail-relay/instance-group: {{ .Values.podAntiAffinity.instanceGroup | default "mail-relay" | quote }}
+                topologyKey: {{ .Values.podAntiAffinity.topologyKey | quote }}
+          {{- end }}
+        {{- end }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

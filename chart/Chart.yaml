@@ -1,18 +1,19 @@
 apiVersion: v2
 name: mail-relay
-description: A Helm chart for deploying a mail relay server with Postfix and OpenDKIM
+description: Haraka-based SMTP relay with DKIM signing and DNS automation
 type: application
-version: 0.0.12
-appVersion: "latest"
+version: 2.0.0
+appVersion: "3.0.0"
 keywords:
-  - mail
-  - postfix
-  - dkim
-  - relay
   - smtp
+  - mail
+  - relay
+  - haraka
+  - dkim
+  - kubernetes
 home: https://github.com/lnking81/mail-relay-chart
 sources:
   - https://github.com/lnking81/mail-relay-chart
+  - https://github.com/haraka/Haraka
 maintainers:
   - name: lnking81
-    email: ilya@strukov.net

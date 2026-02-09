@@ -1,16 +1,11 @@
-{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "mail-relay.fullname" . }}
-  {{- if .Values.monitoring.serviceMonitor.namespace }}
-  namespace: {{ .Values.monitoring.serviceMonitor.namespace }}
-  {{- else }}
-  namespace: {{ .Release.Namespace }}
-  {{- end }}
   labels:
     {{- include "mail-relay.labels" . | nindent 4 }}
-    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
@@ -18,8 +13,37 @@ spec:
     matchLabels:
       {{- include "mail-relay.selectorLabels" . | nindent 6 }}
   endpoints:
-    - port: smtp
-      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+    - port: http
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
       path: /metrics
-      scheme: http
+      # Add labels to identify namespace for multi-tenant support
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+      # Add static labels per release for dashboard filtering
+      metricRelabelings:
+        - sourceLabels: []
+          targetLabel: hostname
+          replacement: {{ .Values.mail.hostname | quote }}
+        - sourceLabels: []
+          targetLabel: release
+          replacement: {{ .Release.Name | quote }}
+    {{- if .Values.adaptiveRate.enabled }}
+    - port: rate-metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      path: /metrics
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+      metricRelabelings:
+        - sourceLabels: []
+          targetLabel: hostname
+          replacement: {{ .Values.mail.hostname | quote }}
+        - sourceLabels: []
+          targetLabel: release
+          replacement: {{ .Release.Name | quote }}
+    {{- end }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
 {{- end }}

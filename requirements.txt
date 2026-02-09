@@ -1,0 +1,7 @@
+# DNS Manager Python Dependencies
+
+# HTTP client for API calls
+requests>=2.28.0
+
+# DNS resolution for verification (optional)
+dnspython>=2.3.0
