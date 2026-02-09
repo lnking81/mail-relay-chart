@@ -8,9 +8,10 @@ Automatically adjusts outbound mail delivery rate based on remote server respons
 
 **Solution**: This plugin dynamically adjusts delivery delays based on actual server responses:
 
-- **On 421 / Rate Limit errors**: Increases delay (exponential backoff)
+- **On rate limit errors (421, 4.7.28)**: Increases delay (exponential backoff)
+- **On other 4xx errors**: Tracked but doesn't affect delay (recipient-specific issues)
 - **On successful delivery**: Gradually decreases delay (recovery)
-- **Per-domain tracking**: Each domain has its own rate state
+- **Per-MX-provider tracking**: Rate limiting is per MX provider, not recipient domain
 - **Uses `send_email` hook with `DELAY`**: Actually throttles outbound delivery
 
 ## Algorithm
@@ -18,21 +19,23 @@ Automatically adjusts outbound mail delivery rate based on remote server respons
 ```
 Initial state: delay = initial_delay (e.g., 5 seconds)
 
-On DEFERRED (421, 4xx):
-    consecutiveFailures++
-    delay = min(delay × backoff_multiplier, max_delay)
-    If error contains "rate limit" or "421 4.7.28":
-        delay = min(delay × 1.5, max_delay)  # Extra aggressive
+On DEFERRED:
+    If error is rate limit (421, 4.7.28, "rate limit", "too many", "throttl"):
+        consecutiveRateLimitFailures++
+        delay = min(delay × backoff_multiplier, max_delay)
+    Else (other 4xx errors like 450, 451, 452):
+        # Track for monitoring, but don't increase delay
+        # These are typically recipient-specific, not provider-wide
 
 On DELIVERED:
+    consecutiveRateLimitFailures = 0
     consecutiveSuccesses++
-    consecutiveFailures = 0
     If consecutiveSuccesses >= success_threshold:
         delay = max(delay × recovery_rate, min_delay)
         consecutiveSuccesses = 0
 
 On SEND_EMAIL (before delivery):
-    If consecutiveFailures > 0:
+    If consecutiveRateLimitFailures > 0 AND delay > min_delay:
         Apply DELAY of current delay value
 ```
 
@@ -123,9 +126,21 @@ Gmail is happy, you've warmed up!
 Current: delay=15s for gmail.com
 → Deliver message: 421 4.7.28 Rate limited
 → delay increased to 22.5s (×1.5)
-→ Extra backoff: delay=33.75s (×1.5 again for rate limit)
+→ consecutiveRateLimitFailures = 1
 → Next attempt succeeds
+→ consecutiveRateLimitFailures = 0
 → After 10 successes: delay starts recovering
+```
+
+### Non-Rate-Limit 4xx Error
+
+```
+Current: delay=15s for some-domain.com
+→ Deliver message: 450 Mailbox temporarily unavailable
+→ delay unchanged (still 15s)
+→ consecutiveRateLimitFailures = 0 (no rate limiting)
+→ Only tracked for monitoring, no slowdown
+→ Problem is with recipient, not provider-wide
 ```
 
 ## Monitoring
@@ -134,22 +149,24 @@ The plugin tracks per-domain statistics:
 
 - Current delay (ms)
 - Consecutive successes
-- Consecutive failures
+- Consecutive failures (all deferred errors)
+- Consecutive rate limit failures (only rate limit errors - controls delay)
 - Last update timestamp
 
 ### Prometheus Metrics
 
 When `prom-client` is available (installed by `haraka-plugin-prometheus`), the plugin exports the following metrics:
 
-| Metric                                              | Type    | Description                                 |
-| --------------------------------------------------- | ------- | ------------------------------------------- |
-| `haraka_adaptive_rate_delay_ms{domain}`             | Gauge   | Current delay in milliseconds               |
-| `haraka_adaptive_rate_consecutive_failures{domain}` | Gauge   | Current failure streak                      |
-| `haraka_adaptive_rate_deliveries_total{domain}`     | Counter | Total delivered messages                    |
-| `haraka_adaptive_rate_deferrals_total{domain}`      | Counter | Total deferred messages                     |
-| `haraka_adaptive_rate_bounces_total{domain}`        | Counter | Total bounced messages                      |
-| `haraka_adaptive_rate_delays_applied_total{domain}` | Counter | Times delivery was delayed                  |
-| `haraka_adaptive_rate_rate_limited_total{domain}`   | Counter | Explicit rate limit responses (421, 4.7.28) |
+| Metric                                                         | Type    | Description                                 |
+| -------------------------------------------------------------- | ------- | ------------------------------------------- |
+| `haraka_adaptive_rate_delay_ms{domain}`                        | Gauge   | Current delay in milliseconds               |
+| `haraka_adaptive_rate_consecutive_failures{domain}`            | Gauge   | All deferred errors (for monitoring)        |
+| `haraka_adaptive_rate_consecutive_rate_limit_failures{domain}` | Gauge   | Rate limit errors only (controls delay)     |
+| `haraka_adaptive_rate_deliveries_total{domain}`                | Counter | Total delivered messages                    |
+| `haraka_adaptive_rate_deferrals_total{domain}`                 | Counter | Total deferred messages                     |
+| `haraka_adaptive_rate_bounces_total{domain}`                   | Counter | Total bounced messages                      |
+| `haraka_adaptive_rate_delays_applied_total{domain}`            | Counter | Times delivery was delayed                  |
+| `haraka_adaptive_rate_rate_limited_total{domain}`              | Counter | Explicit rate limit responses (421, 4.7.28) |
 
 Metrics are automatically enabled when both `metrics.enabled` and `adaptiveRate.enabled` are true in the Helm chart.
 
@@ -164,7 +181,10 @@ haraka_adaptive_rate_delay_ms{namespace=~"$namespace", release=~"$release"}
 # Rate limited responses per hour
 sum(increase(haraka_adaptive_rate_rate_limited_total[1h])) by (domain)
 
-# Domains currently experiencing issues
+# Domains currently being rate limited (delay will be applied)
+haraka_adaptive_rate_consecutive_rate_limit_failures > 0
+
+# All domains with delivery issues (monitoring)
 haraka_adaptive_rate_consecutive_failures > 0
 ```
 
