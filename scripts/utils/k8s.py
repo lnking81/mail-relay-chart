@@ -217,11 +217,12 @@ class KubernetesClient:
 
     def get_dkim_record(self, domain: str) -> Optional[str]:
         """Get DKIM DNS record value from secret"""
-        # Secret name format: {release}-dkim-{domain-with-dashes}
-        secret_name = f"{self.config.release_name}-dkim-{domain.replace('.', '-')}"
+        # Secret name format: {fullname}-dkim-{domain-with-dashes}
+        # fullname = service_name (includes release name + chart name suffix)
+        secret_name = f"{self.config.service_name}-dkim-{domain.replace('.', '-')}"
         return self.get_secret_data(secret_name, "dns.record")
 
     def get_dkim_selector(self, domain: str) -> Optional[str]:
         """Get DKIM selector from secret"""
-        secret_name = f"{self.config.release_name}-dkim-{domain.replace('.', '-')}"
+        secret_name = f"{self.config.service_name}-dkim-{domain.replace('.', '-')}"
         return self.get_secret_data(secret_name, "selector")
