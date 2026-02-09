@@ -4,17 +4,17 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
 
 ## Features
 
-| Category           | Features                                                                            |
-| ------------------ | ----------------------------------------------------------------------------------- |
-| **Mail Server**    | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support  |
-| **Security**       | TLS/STARTTLS, DKIM signing (auto-generated keys), sender validation, SMTP AUTH      |
-| **DNS**            | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns              |
-| **Delivery**       | Static + adaptive rate limiting, per-domain throttling, IP warmup support           |
-| **Inbound**        | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses      |
-| **DMARC Analytics**| Aggregate report parsing, deliverability metrics, spoofing detection, policy tuning |
-| **Webhooks**       | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints     |
-| **Monitoring**     | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                   |
-| **Infrastructure** | Kubernetes-native, non-root container, Network Policies, PVC for queue              |
+| Category            | Features                                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Mail Server**     | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support                        |
+| **Security**        | TLS/STARTTLS (cert-manager integration), DKIM signing (auto-generated keys), sender validation, SMTP AUTH |
+| **DNS**             | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns                                    |
+| **Delivery**        | Static + adaptive rate limiting, per-domain throttling, IP warmup support                                 |
+| **Inbound**         | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses                            |
+| **DMARC Analytics** | Aggregate report parsing, deliverability metrics, spoofing detection, policy tuning                       |
+| **Webhooks**        | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints                           |
+| **Monitoring**      | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                                         |
+| **Infrastructure**  | Kubernetes-native, non-root container, Network Policies, PVC for queue                                    |
 
 ---
 
@@ -51,6 +51,7 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
 - Kubernetes 1.20+
 - Helm 3.2+
 - (Optional) Cloudflare account for DNS automation
+- (Optional) cert-manager for automatic TLS certificate provisioning
 
 ### Installation
 
@@ -341,12 +342,22 @@ Enable STARTTLS and implicit TLS for secure SMTP connections:
 tls:
   enabled: true
 
-  # Option 1: Use existing TLS secret (recommended)
+  # Option 1: cert-manager integration (recommended for production)
+  # Automatically creates Certificate resource
+  certManager:
+    enabled: true
+    issuerRef:
+      name: letsencrypt-dns # Your ClusterIssuer name
+      kind: ClusterIssuer
+    # additionalDnsNames: []     # Extra SANs beyond mail.hostname
+    # duration: "2160h"          # 90 days
+    # renewBefore: "360h"        # 15 days
+
+  # Option 2: Use existing TLS secret
   # Create: kubectl create secret tls mail-tls --cert=cert.pem --key=key.pem
-  # Or use cert-manager to auto-provision
   existingSecret: "mail-tls-secret"
 
-  # Option 2: Auto-generate self-signed (for testing/internal only)
+  # Option 3: Auto-generate self-signed (for testing/internal only)
   selfSigned:
     enabled: true
     cn: "mail.example.com" # Defaults to mail.hostname
@@ -362,37 +373,38 @@ tls:
   implicitTlsPort: 465 # Add matching service if needed
 ```
 
-**With cert-manager:**
+**With cert-manager (recommended):**
+
+The chart automatically creates a `Certificate` resource when `tls.certManager.enabled: true`:
 
 ```yaml
-# Certificate resource
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: mail-tls
-spec:
-  secretName: mail-tls-secret
-  dnsNames:
-    - mail.example.com
-  issuerRef:
-    name: letsencrypt-prod
-    kind: ClusterIssuer
-```
-
-```yaml
-# values.yaml
 tls:
   enabled: true
-  existingSecret: "mail-tls-secret"
+  minVersion: "TLSv1.2"
+  implicitTlsPort: 465
+  certManager:
+    enabled: true
+    issuerRef:
+      name: letsencrypt-dns
+      kind: ClusterIssuer
 ```
+
+This creates:
+
+- `Certificate` resource with `dnsNames: [mail.hostname]`
+- Secret `{release}-mail-relay-tls` (auto-managed by cert-manager)
 
 **With implicit TLS (port 465):**
 
 ```yaml
 tls:
   enabled: true
-  existingSecret: "mail-tls-secret"
   implicitTlsPort: 465
+  certManager:
+    enabled: true
+    issuerRef:
+      name: letsencrypt-dns
+      kind: ClusterIssuer
 
 services:
   - name: ""
@@ -540,14 +552,14 @@ Receive and parse DMARC aggregate reports from major email providers (Google, Mi
 
 DMARC reports are **essential for production email operations**:
 
-| Use Case | Benefit |
-|----------|---------|
-| **Deliverability Monitoring** | Track what percentage of your emails pass SPF/DKIM/DMARC checks at recipient servers |
-| **Spoofing Detection** | Identify unauthorized servers sending email claiming to be from your domain |
-| **Configuration Debugging** | Discover SPF/DKIM misconfigurations before they affect deliverability |
-| **Policy Migration** | Safely transition from `p=none` to `p=quarantine` or `p=reject` with data-driven decisions |
-| **Source Discovery** | Find all services (SaaS apps, marketing platforms, etc.) sending on your domain's behalf |
-| **Anomaly Alerting** | Detect sudden spikes in authentication failures that may indicate attacks or misconfigurations |
+| Use Case                      | Benefit                                                                                        |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Deliverability Monitoring** | Track what percentage of your emails pass SPF/DKIM/DMARC checks at recipient servers           |
+| **Spoofing Detection**        | Identify unauthorized servers sending email claiming to be from your domain                    |
+| **Configuration Debugging**   | Discover SPF/DKIM misconfigurations before they affect deliverability                          |
+| **Policy Migration**          | Safely transition from `p=none` to `p=quarantine` or `p=reject` with data-driven decisions     |
+| **Source Discovery**          | Find all services (SaaS apps, marketing platforms, etc.) sending on your domain's behalf       |
+| **Anomaly Alerting**          | Detect sudden spikes in authentication failures that may indicate attacks or misconfigurations |
 
 **Example insights from DMARC metrics:**
 
@@ -564,7 +576,7 @@ inbound:
   # Add 'dmarc' to recipients to receive DMARC reports
   recipients:
     - postmaster
-    - dmarc       # Receives reports at dmarc@yourdomain.com
+    - dmarc # Receives reports at dmarc@yourdomain.com
     - abuse
     - "bounce+"
 

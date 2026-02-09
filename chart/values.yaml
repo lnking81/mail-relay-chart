@@ -611,6 +611,40 @@ tls:
     # Validity period in days
     validDays: 365
 
+  # cert-manager integration
+  # Automatically creates Certificate resource for Let's Encrypt or other issuers
+  # Requires cert-manager to be installed in the cluster
+  certManager:
+    # Enable cert-manager Certificate creation
+    # When enabled, creates Certificate resource and sets existingSecret automatically
+    enabled: false
+
+    # Issuer reference (ClusterIssuer or Issuer)
+    issuerRef:
+      # Name of the issuer (e.g., "letsencrypt-prod", "letsencrypt-staging")
+      name: "letsencrypt-prod"
+      # Kind: ClusterIssuer (cluster-wide) or Issuer (namespace-scoped)
+      kind: "ClusterIssuer"
+      # Group (optional, defaults to cert-manager.io)
+      group: ""
+
+    # Additional DNS names for the certificate (beyond mail.hostname)
+    # Example: ["smtp.example.com", "mail2.example.com"]
+    additionalDnsNames: []
+
+    # Certificate duration (default: 2160h = 90 days)
+    duration: ""
+
+    # Renew before expiration (default: 360h = 15 days)
+    renewBefore: ""
+
+    # Private key settings
+    privateKey:
+      # Algorithm: RSA, ECDSA, Ed25519
+      algorithm: "RSA"
+      # Size: 2048, 4096 for RSA; 256, 384, 521 for ECDSA
+      size: 2048
+
   # TLS cipher list (OpenSSL format)
   # Default: modern secure ciphers
   # Empty = Haraka default

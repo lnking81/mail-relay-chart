@@ -159,6 +159,21 @@ DNS Manager owner ID
 {{- end }}
 
 {{/*
+TLS secret name
+Returns the name of the TLS secret to use:
+1. existingSecret if specified
+2. auto-generated name if certManager.enabled
+3. auto-generated name for selfSigned
+*/}}
+{{- define "mail-relay.tlsSecretName" -}}
+{{- if .Values.tls.existingSecret -}}
+{{- .Values.tls.existingSecret -}}
+{{- else -}}
+{{- printf "%s-tls" (include "mail-relay.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 DNS Manager environment variables
 Used by dns-init and dns-watcher containers
 */}}

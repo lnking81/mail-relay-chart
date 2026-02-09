@@ -45,7 +45,7 @@ data:
   {{- if .Values.tls.enabled }}
   # === TLS/SSL Configuration ===
   tls.ini: |
-    {{- if or .Values.tls.existingSecret .Values.tls.selfSigned.enabled }}
+    {{- if or .Values.tls.existingSecret .Values.tls.selfSigned.enabled .Values.tls.certManager.enabled }}
     ; Certificate and key paths (mounted from secret or generated)
     key=/app/config/tls/tls.key
     cert=/app/config/tls/tls.crt

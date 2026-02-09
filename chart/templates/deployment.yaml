@@ -39,9 +39,9 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
-      {{- if or .Values.dkim.enabled .Values.dns.enabled (and .Values.tls.enabled .Values.tls.selfSigned.enabled) }}
+      {{- if or .Values.dkim.enabled .Values.dns.enabled (and .Values.tls.enabled .Values.tls.selfSigned.enabled (not .Values.tls.existingSecret) (not .Values.tls.certManager.enabled)) }}
       initContainers:
-        {{- if and .Values.tls.enabled .Values.tls.selfSigned.enabled (not .Values.tls.existingSecret) }}
+        {{- if and .Values.tls.enabled .Values.tls.selfSigned.enabled (not .Values.tls.existingSecret) (not .Values.tls.certManager.enabled) }}
         # TLS Init Container - generates self-signed certificate
         - name: tls-init
           image: {{ include "mail-relay.image" . | quote }}
@@ -326,9 +326,9 @@ spec:
         {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls-certs
-          {{- if .Values.tls.existingSecret }}
+          {{- if or .Values.tls.existingSecret .Values.tls.certManager.enabled }}
           secret:
-            secretName: {{ .Values.tls.existingSecret }}
+            secretName: {{ include "mail-relay.tlsSecretName" . }}
             defaultMode: 0400
           {{- else if .Values.tls.selfSigned.enabled }}
           emptyDir: {}
