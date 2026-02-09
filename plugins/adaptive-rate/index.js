@@ -48,7 +48,10 @@ const DELAY = 'DELAY';
  * Note: The label is called "domain" but actually contains MX provider name.
  *
  * Algorithm:
- * - On deferred (421, 4xx): delay increases (exponential backoff)
+ * - On deferred with rate limit (421, 4.7.28, "rate limit", "too many", "throttl"):
+ *   delay increases (exponential backoff)
+ * - On deferred without rate limit (450, 451, 452, etc.): no delay increase
+ *   (these are typically recipient-specific, not provider-wide)
  * - On delivered: delay decreases after threshold successes (recovery)
  * - On send_email: apply delay if time since last send < current delay
  *
@@ -677,30 +680,26 @@ exports.on_deferred = function (next, hmail, params) {
         try { metrics.deferralsCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
     }
 
-    // Increase delay on failure
-    const oldDelay = state.delay;
-    state.delay = Math.min(
-        Math.floor(state.delay * cfg.backoffMultiplier),
-        cfg.maxDelay
-    );
-
-    // Check for explicit rate limiting
-    const isRateLimited = /421|4\.7\.28|rate.?limit|too.?many|try.?again.?later/i.test(errMsg);
+    // Check for explicit rate limiting (421, 4.7.28, etc.)
+    // Only increase delay for rate limit errors, not all 4xx errors
+    // Other 4xx (450 mailbox unavailable, 451 local error, 452 storage, 454 TLS)
+    // are typically recipient-specific and shouldn't slow down the whole provider
+    const isRateLimited = /421|4\.7\.28|rate.?limit|too.?many|try.?again.?later|throttl/i.test(errMsg);
 
     if (isRateLimited) {
-        // Extra aggressive backoff for rate limiting
+        const oldDelay = state.delay;
         state.delay = Math.min(
-            Math.floor(state.delay * 1.5),
+            Math.floor(state.delay * cfg.backoffMultiplier),
             cfg.maxDelay
         );
-        plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms`);
+        plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms (streak: ${state.consecutiveFailures})`);
 
         // Record metric: explicit rate limit
         if (metricsInitialized && metrics.rateLimitedCounter) {
             try { metrics.rateLimitedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
     } else {
-        plugin.loginfo(`Adaptive rate: ${mxProvider} deferred - delay ${oldDelay}ms -> ${state.delay}ms (streak: ${state.consecutiveFailures})`);
+        plugin.loginfo(`Adaptive rate: ${mxProvider} deferred (non-rate-limit) - no delay increase (streak: ${state.consecutiveFailures})`);
     }
 
     updateMetrics(mxProvider, state);
