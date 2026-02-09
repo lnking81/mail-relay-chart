@@ -459,6 +459,115 @@ data:
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Number of MX providers with delay above initial (5s)",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 5 }
+              ]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 8, "x": 0, "y": 24 },
+          "id": 46,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "count(haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"} > 5000) or vector(0)",
+            "legendFormat": "Throttled Domains",
+            "refId": "A"
+          }],
+          "title": "Throttled Domains",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "MX providers currently in rate limit backoff",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 3 }
+              ]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 8, "x": 8, "y": 24 },
+          "id": 47,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "count(haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0) or vector(0)",
+            "legendFormat": "Active Rate Limits",
+            "refId": "A"
+          }],
+          "title": "Active Rate Limits",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Total rate limit responses (421) in the last hour",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 10 },
+                { "color": "red", "value": 50 }
+              ]},
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 8, "x": 16, "y": 24 },
+          "id": 48,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_adaptive_rate_rate_limited_total{namespace=~\"$namespace\", release=~\"$release\"}[1h])) or vector(0)",
+            "legendFormat": "Rate Limits (1h)",
+            "refId": "A"
+          }],
+          "title": "Rate Limits (1h)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "description": "Domains with elevated delay (above initial 5s). Shows only domains that experienced rate limiting.",
           "fieldConfig": {
             "defaults": {
@@ -488,7 +597,7 @@ data:
               }
             ]
           },
-          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
           "id": 41,
           "options": {
             "cellHeight": "sm",
@@ -549,7 +658,7 @@ data:
               }
             ]
           },
-          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
           "id": 42,
           "options": {
             "cellHeight": "sm",
@@ -610,7 +719,7 @@ data:
               }
             ]
           },
-          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
           "id": 43,
           "options": {
             "cellHeight": "sm",
@@ -670,7 +779,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
           "id": 44,
           "options": {
             "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -719,7 +828,7 @@ data:
               { "matcher": { "id": "byRegexp", "options": ".*Bounced" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
             ]
           },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
           "id": 45,
           "options": {
             "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -750,7 +859,7 @@ data:
         },
         {
           "collapsed": true,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
           "id": 30,
           "panels": [
             {
