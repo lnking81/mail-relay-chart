@@ -42,6 +42,16 @@ spec:
       {{- if and (eq $svc.type "NodePort") $svc.nodePort }}
       nodePort: {{ $svc.nodePort }}
       {{- end }}
+    {{- /* Extra ports for multi-port services (e.g., 25 + 465 on same LB) */ -}}
+    {{- range $portIndex, $extraPort := $svc.extraPorts }}
+    - port: {{ $extraPort.port | int }}
+      targetPort: smtp-{{ $extraPort.targetPort | default $extraPort.port | int }}
+      protocol: TCP
+      name: {{ $extraPort.name | default (printf "smtp-%d" ($extraPort.port | int)) }}
+      {{- if and (eq $svc.type "NodePort") $extraPort.nodePort }}
+      nodePort: {{ $extraPort.nodePort }}
+      {{- end }}
+    {{- end }}
     {{- if or $.Values.metrics.enabled $.Values.dashboard.watch.enabled $.Values.dashboard.logReader.enabled }}
     {{- /* Only add http port to first service to avoid conflicts */ -}}
     {{- if eq $index 0 }}

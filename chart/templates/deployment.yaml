@@ -39,8 +39,37 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
-      {{- if or .Values.dkim.enabled .Values.dns.enabled }}
+      {{- if or .Values.dkim.enabled .Values.dns.enabled (and .Values.tls.enabled .Values.tls.selfSigned.enabled) }}
       initContainers:
+        {{- if and .Values.tls.enabled .Values.tls.selfSigned.enabled (not .Values.tls.existingSecret) }}
+        # TLS Init Container - generates self-signed certificate
+        - name: tls-init
+          image: {{ include "mail-relay.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              CN="{{ .Values.tls.selfSigned.cn | default .Values.mail.hostname }}"
+              DAYS="{{ .Values.tls.selfSigned.validDays | default 365 }}"
+              echo "Generating self-signed TLS certificate for $CN..."
+              openssl req -x509 -nodes -days "$DAYS" -newkey rsa:2048 \
+                -keyout /tls/tls.key -out /tls/tls.crt \
+                -subj "/CN=$CN" \
+                -addext "subjectAltName=DNS:$CN"
+              chmod 400 /tls/tls.key
+              chmod 444 /tls/tls.crt
+              echo "Self-signed certificate generated successfully"
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /tls
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        {{- end }}
         {{- if .Values.dkim.enabled }}
         # DKIM Init Container - generates keys if not exist
         - name: dkim-init
@@ -112,6 +141,11 @@ spec:
             {{- range .Values.services }}
             {{- $targetPort := .targetPort | default 25 | int }}
             {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
+            {{- end }}
+            {{- /* Add implicit TLS port if configured */ -}}
+            {{- if .Values.tls.implicitTlsPort }}
+            {{- $implicitPort := .Values.tls.implicitTlsPort | int }}
+            {{- $_ := set $ports (printf "%d" $implicitPort) $implicitPort }}
             {{- end }}
             {{- range $portStr, $port := $ports }}
             - name: smtp-{{ $port }}
@@ -219,6 +253,11 @@ spec:
             - name: data
               mountPath: /data
             {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: tls-certs
+              mountPath: /app/config/tls
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
 
@@ -284,6 +323,18 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (include "mail-relay.fullname" .) }}
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls-certs
+          {{- if .Values.tls.existingSecret }}
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+            defaultMode: 0400
+          {{- else if .Values.tls.selfSigned.enabled }}
+          emptyDir: {}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
         {{- end }}
         - name: tmp
           emptyDir: {}

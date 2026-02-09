@@ -4,16 +4,16 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
 
 ## Features
 
-| Category           | Features                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------ |
-| **Mail Server**    | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support   |
-| **Security**       | DKIM signing (auto-generated keys), sender validation whitelist/blacklist, SMTP AUTH |
-| **DNS**            | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns               |
-| **Delivery**       | Static + adaptive rate limiting, per-domain throttling, IP warmup support            |
-| **Inbound**        | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses       |
-| **Webhooks**       | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints      |
-| **Monitoring**     | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                    |
-| **Infrastructure** | Kubernetes-native, non-root container, Network Policies, PVC for queue               |
+| Category           | Features                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| **Mail Server**    | Haraka SMTP server with 50+ concurrent connections, HAProxy PROXY Protocol support |
+| **Security**       | TLS/STARTTLS, DKIM signing (auto-generated keys), sender validation, SMTP AUTH     |
+| **DNS**            | Automatic SPF/DKIM/DMARC/MX records via Cloudflare API or external-dns             |
+| **Delivery**       | Static + adaptive rate limiting, per-domain throttling, IP warmup support          |
+| **Inbound**        | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses     |
+| **Webhooks**       | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints    |
+| **Monitoring**     | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                  |
+| **Infrastructure** | Kubernetes-native, non-root container, Network Policies, PVC for queue             |
 
 ---
 
@@ -28,6 +28,7 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
   - [Services](#services)
   - [PROXY Protocol](#proxy-protocol)
   - [Sender Validation](#sender-validation)
+  - [TLS/SSL](#tlsssl)
   - [SMTP Authentication](#smtp-authentication)
   - [Rate Limiting](#rate-limiting)
   - [Adaptive Rate Limiting](#adaptive-rate-limiting)
@@ -268,6 +269,11 @@ services:
     proxyProtocol: true
     loadBalancerClass: "hcloud"
     externalTrafficPolicy: "Local"
+    # Additional ports on the same LoadBalancer
+    extraPorts:
+      - name: smtps
+        port: 465
+        targetPort: 465
 
   # Internal ClusterIP (no PROXY protocol)
   - name: internal
@@ -278,6 +284,8 @@ services:
 ```
 
 Each unique `targetPort` creates a Haraka listener. Ports with `proxyProtocol: true` expect PROXY headers.
+
+Use `extraPorts` to expose multiple ports on a single LoadBalancer (e.g., 25 for STARTTLS and 465 for implicit TLS).
 
 ### PROXY Protocol
 
@@ -323,6 +331,78 @@ mail:
       - "hr@example.com"
 ```
 
+### TLS/SSL
+
+Enable STARTTLS and implicit TLS for secure SMTP connections:
+
+```yaml
+tls:
+  enabled: true
+
+  # Option 1: Use existing TLS secret (recommended)
+  # Create: kubectl create secret tls mail-tls --cert=cert.pem --key=key.pem
+  # Or use cert-manager to auto-provision
+  existingSecret: "mail-tls-secret"
+
+  # Option 2: Auto-generate self-signed (for testing/internal only)
+  selfSigned:
+    enabled: true
+    cn: "mail.example.com" # Defaults to mail.hostname
+    validDays: 365
+
+  # TLS settings
+  minVersion: "TLSv1.2" # TLSv1.2 or TLSv1.3
+  ciphers: "" # Custom cipher list (OpenSSL format)
+  requireTls: false # Reject plaintext connections
+  advertiseToAll: true # Advertise STARTTLS to external senders
+
+  # Implicit TLS (port 465, TLS from connection start)
+  implicitTlsPort: 465 # Add matching service if needed
+```
+
+**With cert-manager:**
+
+```yaml
+# Certificate resource
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mail-tls
+spec:
+  secretName: mail-tls-secret
+  dnsNames:
+    - mail.example.com
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+```
+
+```yaml
+# values.yaml
+tls:
+  enabled: true
+  existingSecret: "mail-tls-secret"
+```
+
+**With implicit TLS (port 465):**
+
+```yaml
+tls:
+  enabled: true
+  existingSecret: "mail-tls-secret"
+  implicitTlsPort: 465
+
+services:
+  - name: ""
+    type: LoadBalancer
+    port: 25
+    targetPort: 25
+    extraPorts:
+      - name: smtps
+        port: 465
+        targetPort: 465
+```
+
 ### SMTP Authentication
 
 Allow external clients to authenticate:
@@ -331,7 +411,7 @@ Allow external clients to authenticate:
 auth:
   enabled: true
   methods: "PLAIN,LOGIN"
-  requireTls: true
+  requireTls: true # Require TLS before AUTH (recommended)
   constrainSender: true # MAIL FROM must match auth user
 
   # Inline users (use existingSecret in production)

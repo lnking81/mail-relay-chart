@@ -23,6 +23,10 @@ data:
     {{- $targetPort := .targetPort | default 25 | int }}
     {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
     {{- end }}
+    {{- /* Add implicit TLS port if configured */ -}}
+    {{- if .Values.tls.implicitTlsPort }}
+    {{- $_ := set $ports (printf "%d" (.Values.tls.implicitTlsPort | int)) (.Values.tls.implicitTlsPort | int) }}
+    {{- end }}
     {{- $listenPorts := list }}
     {{- range $portStr, $port := $ports }}
     {{- $listenPorts = append $listenPorts (printf "[::0]:%d" ($port | int)) }}
@@ -37,6 +41,60 @@ data:
     [headers]
     add_received=true
     clean_auth_results=true
+
+  {{- if .Values.tls.enabled }}
+  # === TLS/SSL Configuration ===
+  tls.ini: |
+    {{- if or .Values.tls.existingSecret .Values.tls.selfSigned.enabled }}
+    ; Certificate and key paths (mounted from secret or generated)
+    key=/app/config/tls/tls.key
+    cert=/app/config/tls/tls.crt
+    {{- end }}
+
+    {{- if .Values.tls.ciphers }}
+    ; Custom cipher list
+    ciphers={{ .Values.tls.ciphers }}
+    {{- end }}
+
+    {{- if .Values.tls.minVersion }}
+    ; Minimum TLS version
+    {{- if eq .Values.tls.minVersion "TLSv1.3" }}
+    minVersion=TLSv1.3
+    {{- else }}
+    minVersion=TLSv1.2
+    {{- end }}
+    {{- end }}
+
+    ; Reject ciphers with key length < 128 bits
+    rejectUnauthorized=false
+
+    ; Honor server cipher order (more secure)
+    honorCipherOrder=true
+
+    ; Request client certificate (for mutual TLS, optional)
+    requestCert=false
+
+    {{- if .Values.tls.requireTls }}
+    ; Require TLS for all connections (no plaintext)
+    ; WARNING: May break some legacy clients
+    no_tls_hosts=
+    {{- end }}
+
+    [advertise]
+    ; Advertise STARTTLS to all connections
+    {{- if .Values.tls.advertiseToAll }}
+    to=*
+    {{- else }}
+    ; Only advertise to relay/authenticated connections
+    to=relay,auth
+    {{- end }}
+
+    {{- if .Values.tls.implicitTlsPort }}
+    [implicit]
+    ; Port for implicit TLS (TLS from connection start, no STARTTLS)
+    port={{ .Values.tls.implicitTlsPort }}
+    {{- end }}
+  {{- end }}
 
   # Connection settings - from Haraka default config/connection.ini
   connection.ini: |
@@ -581,6 +639,9 @@ data:
   # === Enabled Plugins ===
   plugins: |
     # Core functionality
+    {{- if .Values.tls.enabled }}
+    tls
+    {{- end }}
     relay
     {{- if .Values.dkim.enabled }}
     dkim

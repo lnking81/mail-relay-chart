@@ -493,6 +493,13 @@ services:
     # Examples:
     #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
     #   metallb.universe.tf/loadBalancerIPs: "192.168.1.100"
+    # Extra ports on the same service (for multi-port LoadBalancer)
+    # Example for TLS on ports 25 (STARTTLS) + 465 (implicit TLS):
+    # extraPorts:
+    #   - name: smtps
+    #     port: 465
+    #     targetPort: 465
+    extraPorts: []
 
 # === Persistence ===
 persistence:
@@ -577,6 +584,52 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
+# === TLS/SSL Configuration ===
+# Enables STARTTLS and implicit TLS for SMTP connections
+tls:
+  # Enable TLS support (STARTTLS)
+  enabled: false
+
+  # Use existing Kubernetes TLS secret (e.g., from cert-manager)
+  # Secret must contain tls.crt and tls.key
+  # Example: kubectl create secret tls mail-tls --cert=cert.pem --key=key.pem
+  existingSecret: ""
+
+  # Auto-generate self-signed certificate if no existingSecret provided
+  # Useful for internal relay or testing. NOT recommended for production!
+  # Self-signed certs will cause TLS warnings on external mail servers.
+  selfSigned:
+    enabled: false
+    # Common Name for self-signed certificate
+    # Defaults to mail.hostname if not set
+    cn: ""
+    # Validity period in days
+    validDays: 365
+
+  # TLS cipher list (OpenSSL format)
+  # Default: modern secure ciphers
+  # Empty = Haraka default
+  ciphers: ""
+
+  # Minimum TLS version: TLSv1.2, TLSv1.3
+  # TLSv1.2 recommended for compatibility, TLSv1.3 for maximum security
+  minVersion: "TLSv1.2"
+
+  # Implicit TLS port (direct TLS without STARTTLS)
+  # Standard port is 465 (smtps). Set to enable implicit TLS listener.
+  # Requires adding a service with this targetPort.
+  implicitTlsPort: ""
+
+  # Require TLS for all connections (reject plaintext SMTP)
+  # WARNING: Breaks compatibility with servers that don't support TLS
+  # Only enable if all your clients support STARTTLS
+  requireTls: false
+
+  # Advertise STARTTLS to non-relaying connections (external senders)
+  # When false, only relay clients see STARTTLS option
+  # Recommended: true (allows external TLS connections)
+  advertiseToAll: true
+
 # === SMTP Authentication ===
 auth:
   # Enable SMTP AUTH (AUTH PLAIN/LOGIN)
@@ -588,7 +641,7 @@ auth:
   methods: "PLAIN,LOGIN"
 
   # Require TLS before allowing authentication
-  # Should be true in production
+  # Should be true in production (prevents password sniffing)
   requireTls: true
 
   # Constrain sender to authenticated username
