@@ -496,7 +496,7 @@ data:
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "description": "Domains currently experiencing delivery issues",
+          "description": "Rate limit failure streak per MX provider. Only rate limit errors (421, 4.7.28) increase delay.",
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -524,11 +524,11 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "topk(10, haraka_adaptive_rate_consecutive_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0)",
+            "expr": "topk(10, haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0)",
             "legendFormat": "{{`{{domain}}`}}",
             "refId": "A"
           }],
-          "title": "Consecutive Failures by Domain",
+          "title": "Rate Limit Streak by Domain",
           "type": "stat"
         },
         {

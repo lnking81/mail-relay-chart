@@ -38,7 +38,8 @@ const DELAY = 'DELAY';
  *
  * PROMETHEUS METRICS (all per MX provider):
  * - haraka_adaptive_rate_delay_ms{domain} - current delay in milliseconds
- * - haraka_adaptive_rate_consecutive_failures{domain} - failure streak count
+ * - haraka_adaptive_rate_consecutive_failures{domain} - all deferred errors count
+ * - haraka_adaptive_rate_consecutive_rate_limit_failures{domain} - rate limit errors only (controls delay)
  * - haraka_adaptive_rate_deliveries_total{domain} - total delivered messages
  * - haraka_adaptive_rate_deferrals_total{domain} - total deferred messages
  * - haraka_adaptive_rate_bounces_total{domain} - total bounced messages
@@ -87,6 +88,7 @@ let metricsRegistry = null;
 let metrics = {
     delayGauge: null,
     failuresGauge: null,
+    rateLimitFailuresGauge: null,  // Rate limit specific failures
     deliveriesCounter: null,
     deferralsCounter: null,
     bouncesCounter: null,
@@ -187,10 +189,18 @@ function initMetrics(plugin) {
             registers: [metricsRegistry]
         });
 
-        // Consecutive failures per domain (Gauge)
+        // Consecutive failures per domain (Gauge) - all deferred errors
         metrics.failuresGauge = new client.Gauge({
             name: prefix + 'consecutive_failures',
-            help: 'Current consecutive failure count',
+            help: 'Current consecutive failure count (all deferred errors)',
+            labelNames: ['domain'],
+            registers: [metricsRegistry]
+        });
+
+        // Consecutive rate limit failures per domain (Gauge) - only rate limit errors
+        metrics.rateLimitFailuresGauge = new client.Gauge({
+            name: prefix + 'consecutive_rate_limit_failures',
+            help: 'Current consecutive rate limit failure count (controls delay)',
             labelNames: ['domain'],
             registers: [metricsRegistry]
         });
@@ -312,6 +322,7 @@ function updateMetrics(domain, state) {
     try {
         metrics.delayGauge.set({ domain }, state.delay);
         metrics.failuresGauge.set({ domain }, state.consecutiveFailures);
+        metrics.rateLimitFailuresGauge.set({ domain }, state.consecutiveRateLimitFailures);
     } catch (err) {
         // Ignore metric errors
     }
@@ -490,10 +501,12 @@ function getState(domain) {
         domainState.set(domain, {
             delay: cfg.initialDelay,
             consecutiveSuccesses: 0,
-            consecutiveFailures: 0,
+            consecutiveFailures: 0,           // All deferred errors (for monitoring)
+            consecutiveRateLimitFailures: 0,  // Only rate limit errors (controls delay)
             totalDelivered: 0,
             totalDeferred: 0,
             totalBounced: 0,
+            totalRateLimited: 0,              // Total rate limit responses
             lastUpdate: Date.now(),
             lastSendTime: 0,           // Track last send time for rate limiting
             lastError: null
@@ -546,14 +559,14 @@ exports.on_send_email = function (next, hmail) {
     const timeSinceLastSend = now - state.lastSendTime;
 
     // Only apply delay if:
-    // 1. We had failures (rate limited) AND
+    // 1. We had RATE LIMIT failures (not just any 4xx) AND
     // 2. Not enough time has passed since last send
-    if (state.consecutiveFailures > 0 && state.delay > cfg.minDelay) {
+    if (state.consecutiveRateLimitFailures > 0 && state.delay > cfg.minDelay) {
         const remainingDelay = state.delay - timeSinceLastSend;
 
         if (remainingDelay > 0) {
             const delaySeconds = Math.ceil(remainingDelay / 1000);
-            plugin.loginfo(`Adaptive rate: Delaying ${mxProvider} by ${remainingDelay}ms (failures: ${state.consecutiveFailures}, last send: ${timeSinceLastSend}ms ago)`);
+            plugin.loginfo(`Adaptive rate: Delaying ${mxProvider} by ${remainingDelay}ms (rate limit streak: ${state.consecutiveRateLimitFailures}, last send: ${timeSinceLastSend}ms ago)`);
 
             // Update last send time to prevent other concurrent sends from skipping delay
             state.lastSendTime = now + remainingDelay;
@@ -608,6 +621,7 @@ exports.on_delivered = function (next, hmail, params) {
     state.totalDelivered++;
     state.consecutiveSuccesses++;
     state.consecutiveFailures = 0;
+    state.consecutiveRateLimitFailures = 0;  // Reset rate limit streak on success
     state.lastUpdate = Date.now();
 
     // Record metrics
@@ -670,7 +684,7 @@ exports.on_deferred = function (next, hmail, params) {
     const cfg = getDomainConfig(mxProvider);
 
     state.totalDeferred++;
-    state.consecutiveFailures++;
+    state.consecutiveFailures++;      // Track all failures for monitoring
     state.consecutiveSuccesses = 0;
     state.lastUpdate = Date.now();
     state.lastError = errMsg.substring(0, 200);
@@ -687,19 +701,22 @@ exports.on_deferred = function (next, hmail, params) {
     const isRateLimited = /421|4\.7\.28|rate.?limit|too.?many|try.?again.?later|throttl/i.test(errMsg);
 
     if (isRateLimited) {
+        state.consecutiveRateLimitFailures++;  // Track rate limit streak separately
+        state.totalRateLimited++;
+
         const oldDelay = state.delay;
         state.delay = Math.min(
             Math.floor(state.delay * cfg.backoffMultiplier),
             cfg.maxDelay
         );
-        plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms (streak: ${state.consecutiveFailures})`);
+        plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms (rate limit streak: ${state.consecutiveRateLimitFailures})`);
 
         // Record metric: explicit rate limit
         if (metricsInitialized && metrics.rateLimitedCounter) {
             try { metrics.rateLimitedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
     } else {
-        plugin.loginfo(`Adaptive rate: ${mxProvider} deferred (non-rate-limit) - no delay increase (streak: ${state.consecutiveFailures})`);
+        plugin.loginfo(`Adaptive rate: ${mxProvider} deferred (non-rate-limit) - no delay increase (all failures: ${state.consecutiveFailures})`);
     }
 
     updateMetrics(mxProvider, state);
@@ -758,9 +775,11 @@ exports.get_stats = function () {
             delay_ms: state.delay,
             consecutive_successes: state.consecutiveSuccesses,
             consecutive_failures: state.consecutiveFailures,
+            consecutive_rate_limit_failures: state.consecutiveRateLimitFailures,
             total_delivered: state.totalDelivered,
             total_deferred: state.totalDeferred,
             total_bounced: state.totalBounced,
+            total_rate_limited: state.totalRateLimited,
             last_send_time: state.lastSendTime ? new Date(state.lastSendTime).toISOString() : null,
             last_error: state.lastError,
             last_update: new Date(state.lastUpdate).toISOString()
@@ -779,9 +798,11 @@ exports.get_domain_stats = function (domain) {
             delay_ms: state.delay,
             consecutive_successes: state.consecutiveSuccesses,
             consecutive_failures: state.consecutiveFailures,
+            consecutive_rate_limit_failures: state.consecutiveRateLimitFailures,
             total_delivered: state.totalDelivered,
             total_deferred: state.totalDeferred,
             total_bounced: state.totalBounced,
+            total_rate_limited: state.totalRateLimited,
             last_send_time: state.lastSendTime ? new Date(state.lastSendTime).toISOString() : null,
             last_error: state.lastError,
             last_update: new Date(state.lastUpdate).toISOString()
