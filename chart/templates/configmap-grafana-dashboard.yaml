@@ -1,4 +1,5 @@
 {{- if and .Values.metrics.enabled .Values.dashboard.grafana.enabled }}
+{{- $dashboardVersion := semver .Chart.Version }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,6 +9,9 @@ metadata:
     {{- with .Values.dashboard.grafana.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+  annotations:
+    # Force Grafana sidecar to reload on chart upgrade
+    grafana.com/dashboard-version: {{ .Chart.Version | quote }}
 data:
   haraka-mail-relay.json: |
     {
@@ -858,8 +862,478 @@ data:
           "type": "timeseries"
         },
         {
-          "collapsed": true,
+          "collapsed": false,
           "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
+          "id": 50,
+          "panels": [],
+          "title": "DMARC Reports Analytics",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Total DMARC aggregate reports received",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 45 },
+          "id": 51,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_dmarc_reports_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])) or vector(0)",
+            "legendFormat": "Reports",
+            "refId": "A"
+          }],
+          "title": "Reports Received",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Total messages analyzed in DMARC reports",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 45 },
+          "id": 52,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])) or vector(0)",
+            "legendFormat": "Messages",
+            "refId": "A"
+          }],
+          "title": "Messages Analyzed",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Percentage of messages with both DKIM and SPF aligned",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "red", "value": null },
+                { "color": "yellow", "value": 80 },
+                { "color": "green", "value": 95 }
+              ]},
+              "unit": "percent",
+              "max": 100,
+              "min": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 45 },
+          "id": 53,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_dmarc_alignment_total{namespace=~\"$namespace\", release=~\"$release\", dkim_aligned=\"yes\", spf_aligned=\"yes\"}[$__range])) / clamp_min(sum(increase(haraka_dmarc_alignment_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])), 1) * 100",
+            "legendFormat": "Alignment",
+            "refId": "A"
+          }],
+          "title": "Full Alignment Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "DKIM pass rate from DMARC reports",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "red", "value": null },
+                { "color": "yellow", "value": 90 },
+                { "color": "green", "value": 98 }
+              ]},
+              "unit": "percent",
+              "max": 100,
+              "min": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 45 },
+          "id": 54,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\", dkim=\"pass\"}[$__range])) / clamp_min(sum(increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])), 1) * 100",
+            "legendFormat": "DKIM Pass",
+            "refId": "A"
+          }],
+          "title": "DKIM Pass Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "SPF pass rate from DMARC reports",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "red", "value": null },
+                { "color": "yellow", "value": 90 },
+                { "color": "green", "value": 98 }
+              ]},
+              "unit": "percent",
+              "max": 100,
+              "min": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 45 },
+          "id": 55,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\", spf=\"pass\"}[$__range])) / clamp_min(sum(increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])), 1) * 100",
+            "legendFormat": "SPF Pass",
+            "refId": "A"
+          }],
+          "title": "SPF Pass Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "DMARC report parsing errors",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 5 }
+              ]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 45 },
+          "id": 56,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_dmarc_parse_errors_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])) or vector(0)",
+            "legendFormat": "Errors",
+            "refId": "A"
+          }],
+          "title": "Parse Errors",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "DMARC alignment results breakdown",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+              "mappings": [],
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "DKIM+SPF Pass" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "DKIM Only" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "SPF Only" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "Neither" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 49 },
+          "id": 57,
+          "options": {
+            "displayLabels": ["name", "percent"],
+            "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"] },
+            "pieType": "donut",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "tooltip": { "mode": "single", "sort": "none" }
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(increase(haraka_dmarc_alignment_total{namespace=~\"$namespace\", release=~\"$release\", dkim_aligned=\"yes\", spf_aligned=\"yes\"}[$__range])) or vector(0)",
+              "legendFormat": "DKIM+SPF Pass",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(increase(haraka_dmarc_alignment_total{namespace=~\"$namespace\", release=~\"$release\", dkim_aligned=\"yes\", spf_aligned=\"no\"}[$__range])) or vector(0)",
+              "legendFormat": "DKIM Only",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(increase(haraka_dmarc_alignment_total{namespace=~\"$namespace\", release=~\"$release\", dkim_aligned=\"no\", spf_aligned=\"yes\"}[$__range])) or vector(0)",
+              "legendFormat": "SPF Only",
+              "refId": "C"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(increase(haraka_dmarc_alignment_total{namespace=~\"$namespace\", release=~\"$release\", dkim_aligned=\"no\", spf_aligned=\"no\"}[$__range])) or vector(0)",
+              "legendFormat": "Neither",
+              "refId": "D"
+            }
+          ],
+          "title": "Alignment Breakdown",
+          "type": "piechart"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Message disposition from DMARC reports",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+              "mappings": [],
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "none" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "quarantine" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "reject" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 49 },
+          "id": 58,
+          "options": {
+            "displayLabels": ["name", "percent"],
+            "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"] },
+            "pieType": "donut",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "tooltip": { "mode": "single", "sort": "none" }
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (disposition) (increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])) > 0",
+              "legendFormat": "{{`{{disposition}}`}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Message Disposition",
+          "type": "piechart"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "DMARC reports received by reporting organization",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "auto" },
+                "filterable": true,
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Reporter" }, "properties": [{ "id": "custom.width", "value": 200 }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 49 },
+          "id": 59,
+          "options": {
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Reports" }]
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum by (reporter_org) (increase(haraka_dmarc_reports_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])) > 0",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
+            "refId": "A"
+          }],
+          "title": "Reports by Organization",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true },
+                "indexByName": {},
+                "renameByName": { "reporter_org": "Reporter", "Value": "Reports" }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Messages reported over time by DKIM/SPF result",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "normal" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*pass.*pass" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byRegexp", "options": ".*fail.*fail" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 57 },
+          "id": 60,
+          "options": {
+            "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum by (dkim, spf) (increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]))",
+            "legendFormat": "DKIM={{`{{dkim}}`}} SPF={{`{{spf}}`}}",
+            "refId": "A"
+          }],
+          "title": "Messages by Auth Result (1h)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Top source IPs sending email for your domain",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "color-background" },
+                "filterable": true,
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 100 },
+                { "color": "red", "value": 1000 }
+              ]},
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Source IP" }, "properties": [{ "id": "custom.width", "value": 150 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] },
+              { "matcher": { "id": "byName", "options": "Domain" }, "properties": [{ "id": "custom.width", "value": 180 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] },
+              { "matcher": { "id": "byName", "options": "Disposition" }, "properties": [{ "id": "custom.width", "value": 100 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 57 },
+          "id": 61,
+          "options": {
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Messages" }]
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "topk(20, sum by (source_ip, domain, disposition) (increase(haraka_dmarc_source_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range])))",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
+            "refId": "A"
+          }],
+          "title": "Top Source IPs",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true },
+                "indexByName": {},
+                "renameByName": { "source_ip": "Source IP", "domain": "Domain", "disposition": "Disposition", "Value": "Messages" }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 65 },
           "id": 30,
           "panels": [
             {
@@ -970,7 +1444,7 @@ data:
       "timezone": "",
       "title": "Haraka Mail Relay",
       "uid": "haraka-mail-relay",
-      "version": 1,
+      "version": {{ add (mul $dashboardVersion.Major 10000) (add (mul $dashboardVersion.Minor 100) $dashboardVersion.Patch) }},
       "weekStart": ""
     }
 {{- end }}
