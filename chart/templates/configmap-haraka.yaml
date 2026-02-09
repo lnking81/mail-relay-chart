@@ -30,6 +30,9 @@ data:
     listen={{ join "," $listenPorts }}
     nodes=1
     strict_rfc1869=false
+    {{- if .Values.haraka.maxMessageSize }}
+    databytes={{ .Values.haraka.maxMessageSize | int64 }}
+    {{- end }}
 
     [headers]
     add_received=true

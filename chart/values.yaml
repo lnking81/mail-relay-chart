@@ -25,6 +25,11 @@ haraka:
   # Show UUID in banner (default: 6 chars). Set to 0 to hide completely
   bannerUuidChars: 0
 
+  # Maximum message size in bytes (0 = unlimited)
+  # Default: 26214400 (25 MB)
+  # Examples: 10485760 (10MB), 52428800 (50MB), 104857600 (100MB)
+  maxMessageSize: 26214400
+
   # Additional plugins beyond core (relay, dkim_sign, limit)
   # Example: ["spf", "headers"]
   plugins: []
