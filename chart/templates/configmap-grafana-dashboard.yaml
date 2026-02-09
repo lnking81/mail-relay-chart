@@ -787,7 +787,7 @@ data:
           },
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"}",
+            "expr": "max by (domain) (haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"})",
             "legendFormat": "{{`{{domain}}`}}",
             "refId": "A"
           }],
