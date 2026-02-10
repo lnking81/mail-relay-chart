@@ -233,9 +233,30 @@ exports.add_tracking_headers = function (next, connection) {
             transaction.notes.verp_hmac = hmac;
             transaction.notes.verp_domain = bounce_domain;
 
-            // Note: Haraka sets Return-Path from mail_from, so we need to modify it
-            // This is done via set_banner or by manipulating mail_from
-            // For now, we add a header that queue/outbound can use
+            // Store original mail_from for reference
+            const original_mail_from = transaction.mail_from ? transaction.mail_from.original : '';
+            transaction.notes.original_mail_from = original_mail_from;
+
+            // CRITICAL: Actually change the envelope MAIL FROM to VERP address
+            // This ensures bounces come back to bounce+...@domain instead of original sender
+            // Haraka's Address class parses the address into user/host components
+            try {
+                const Address = require('address-rfc2821').Address;
+                transaction.mail_from = new Address(`<${verp_address}>`);
+                logger(`VERP envelope MAIL FROM changed: ${original_mail_from} → ${verp_address}`);
+            } catch (err) {
+                // Fallback: modify existing mail_from object directly
+                if (transaction.mail_from) {
+                    transaction.mail_from.original = verp_address;
+                    transaction.mail_from.user = verp_local;
+                    transaction.mail_from.host = bounce_domain;
+                    logger(`VERP envelope MAIL FROM modified: ${original_mail_from} → ${verp_address}`);
+                } else {
+                    plugin.logwarn(`Cannot set VERP: no mail_from object`);
+                }
+            }
+
+            // Also add header for debugging/tracking
             transaction.remove_header('X-Haraka-Return-Path');
             transaction.add_header('X-Haraka-Return-Path', verp_address);
 
