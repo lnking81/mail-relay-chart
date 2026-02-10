@@ -470,7 +470,7 @@ rateLimit:
 
 ### Adaptive Rate Limiting
 
-Auto-adjust delivery speed based on server responses:
+Auto-adjust delivery speed based on server responses with intelligent circuit breaker protection:
 
 ```yaml
 adaptiveRate:
@@ -478,20 +478,24 @@ adaptiveRate:
 
   defaults:
     minDelay: 1000 # Never faster than 1s
-    maxDelay: 60000 # Never slower than 60s
+    maxDelay: 300000 # Never slower than 5 minutes
     initialDelay: 5000 # Start at 5s
     backoffMultiplier: 1.5 # +50% on failure
     recoveryRate: 0.9 # -10% on success
     successThreshold: 5 # Successes before speedup
+    circuitBreakerThreshold: 5 # Rate-limit failures before circuit opens
+    circuitBreakerDuration: 600000 # 10 minutes pause when circuit opens
 
   domains:
     gmail.com:
       enabled: true
       minDelay: 15000
-      maxDelay: 120000
+      maxDelay: 300000
       initialDelay: 20000
       backoffMultiplier: 2.0
       successThreshold: 10
+      circuitBreakerThreshold: 5
+      circuitBreakerDuration: 900000 # 15 minutes for strict providers
 ```
 
 **How it works:**
@@ -500,6 +504,30 @@ adaptiveRate:
 2. On 421/rate-limit: `delay × backoffMultiplier`
 3. On N consecutive successes: `delay × recoveryRate`
 4. Bounded by `minDelay` / `maxDelay`
+
+#### Circuit Breaker
+
+When a provider persistently rate-limits despite backoff reaching `maxDelay`, the Circuit Breaker activates:
+
+| Phase               | Condition                                        | Behavior                                       |
+| ------------------- | ------------------------------------------------ | ---------------------------------------------- |
+| **Closed** (normal) | `consecutiveRateLimitFailures < threshold`       | Normal exponential backoff                     |
+| **Open** (tripped)  | `consecutiveRateLimitFailures >= threshold`      | All sends paused for `circuitBreakerDuration`  |
+| **Recovery**        | After pause expires OR first successful delivery | Circuit closes, delay resets to `initialDelay` |
+
+**Why this matters:**
+
+- Prevents "knocking" every few minutes when at `maxDelay`, which keeps the rate-limit active
+- Gives provider time to fully "cool down" (10-15 minute complete silence)
+- Auto-recovers: first successful delivery closes circuit and resets state
+- Prometheus metrics track circuit state for alerting
+
+**Prometheus metrics:**
+
+| Metric                                             | Type    | Description                           |
+| -------------------------------------------------- | ------- | ------------------------------------- |
+| `haraka_adaptive_rate_circuit_breaker_open`        | Gauge   | 1 = circuit open (paused), 0 = closed |
+| `haraka_adaptive_rate_circuit_breaker_trips_total` | Counter | Total circuit breaker activations     |
 
 ### Inbound Mail (Bounces/FBL)
 

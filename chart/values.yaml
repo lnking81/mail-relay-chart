@@ -219,6 +219,13 @@ rateLimit:
 # Automatically adjusts delivery speed based on server responses
 # When receiving 421/rate limit errors - slows down (backoff)
 # When deliveries succeed - speeds up (recovery)
+#
+# CIRCUIT BREAKER:
+# When consecutive rate-limit failures reach threshold, the "circuit opens":
+# - All sends to this provider are paused for circuitBreakerDuration
+# - No connection attempts are made during this period
+# - This gives the provider time to "cool down"
+# - After duration expires, circuit closes and normal operation resumes
 adaptiveRate:
   # Enable adaptive rate limiting
   enabled: false
@@ -231,7 +238,7 @@ adaptiveRate:
     # Minimum delay between messages (ms) - won't go faster than this
     minDelay: 1000
     # Maximum delay between messages (ms) - won't go slower than this
-    maxDelay: 60000
+    maxDelay: 300000  # 5 minutes
     # Initial delay when starting (ms)
     initialDelay: 5000
     # Multiply delay by this on failure (1.5 = +50%)
@@ -240,6 +247,10 @@ adaptiveRate:
     recoveryRate: 0.9
     # Consecutive successes needed before reducing delay
     successThreshold: 5
+    # Circuit breaker: rate-limit failures before circuit opens
+    circuitBreakerThreshold: 5
+    # Circuit breaker: duration to pause all sends (ms)
+    circuitBreakerDuration: 600000  # 10 minutes
 
   # Per-domain configuration
   # Only domains listed here will have adaptive rate limiting
@@ -248,50 +259,60 @@ adaptiveRate:
     gmail.com:
       enabled: false
       minDelay: 15000 # 15 seconds minimum
-      maxDelay: 120000 # 2 minutes maximum
+      maxDelay: 300000 # 5 minutes maximum
       initialDelay: 20000 # Start at 20 seconds
       backoffMultiplier: 2.0 # Double delay on failure
       recoveryRate: 0.95 # Slow recovery
       successThreshold: 10 # Need 10 successes to speed up
+      circuitBreakerThreshold: 5
+      circuitBreakerDuration: 900000  # 15 minutes for Gmail
 
     # Google Workspace (same infrastructure as Gmail)
     googlemail.com:
       enabled: false
       minDelay: 15000
-      maxDelay: 120000
+      maxDelay: 300000
       initialDelay: 20000
       backoffMultiplier: 2.0
       recoveryRate: 0.95
       successThreshold: 10
+      circuitBreakerThreshold: 5
+      circuitBreakerDuration: 900000
 
     # Microsoft (Outlook, Hotmail, Live)
     outlook.com:
       enabled: false
       minDelay: 10000
-      maxDelay: 90000
+      maxDelay: 300000
       initialDelay: 15000
       backoffMultiplier: 1.5
       recoveryRate: 0.9
       successThreshold: 5
+      circuitBreakerThreshold: 5
+      circuitBreakerDuration: 900000  # 15 minutes for Microsoft
 
     hotmail.com:
       enabled: false
       minDelay: 10000
-      maxDelay: 90000
+      maxDelay: 300000
       initialDelay: 15000
+      circuitBreakerDuration: 900000
 
     live.com:
       enabled: false
       minDelay: 10000
-      maxDelay: 90000
+      maxDelay: 300000
       initialDelay: 15000
+      circuitBreakerDuration: 900000
 
     # Yahoo
     yahoo.com:
       enabled: false
       minDelay: 10000
-      maxDelay: 90000
+      maxDelay: 300000
       initialDelay: 15000
+      circuitBreakerThreshold: 5
+      circuitBreakerDuration: 600000
 
   # Custom domains (add your own)
   # customDomains:
@@ -299,6 +320,8 @@ adaptiveRate:
   #     enabled: true
   #     minDelay: 5000
   #     initialDelay: 10000
+  #     circuitBreakerThreshold: 3
+  #     circuitBreakerDuration: 300000
   customDomains: {}
 
 # === DKIM Configuration ===

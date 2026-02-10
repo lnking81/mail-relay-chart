@@ -18,7 +18,6 @@ data:
     # Copy config from template to working directory (follow symlinks)
     echo "Copying Haraka configuration..."
     cp -rL /app/config-template/* /app/config/
-    ls -la /app/config/
 
     # Auto-detect trusted proxies from LoadBalancer service status
     if [ "${PROXY_PROTOCOL_AUTO_DETECT}" = "true" ]; then
@@ -112,7 +111,6 @@ data:
 
     # Verify key files exist
     echo "  Verifying key files..."
-    ls -la "${DOMAIN_DIR}/"
     if [ ! -f "${PRIVATE_KEY}" ]; then
       echo "  ERROR: Private key not found!" >&2
       exit 1
