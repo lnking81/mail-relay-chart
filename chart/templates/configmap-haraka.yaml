@@ -614,6 +614,34 @@ data:
   {{- end }}
   {{- end }}
 
+  # === Strip Internal Headers ===
+  # Removes internal/sensitive headers from outgoing mail
+  {{- if .Values.haraka.stripHeaders.enabled }}
+  strip_headers.ini: |
+    [main]
+    enabled=true
+    ; Strip ALL Received headers
+    strip_all_received={{ .Values.haraka.stripHeaders.stripAllReceived | default false }}
+    ; Strip only Received headers with internal IPs/hostnames
+    strip_internal_received={{ .Values.haraka.stripHeaders.stripInternalReceived | default true }}
+
+    {{- if .Values.haraka.stripHeaders.headers }}
+    [headers]
+    ; Headers to always strip
+    {{- range .Values.haraka.stripHeaders.headers }}
+    strip[]={{ . }}
+    {{- end }}
+    {{- end }}
+
+    {{- if .Values.haraka.stripHeaders.internalHostnamePatterns }}
+    [internal]
+    ; Additional hostname patterns to detect as internal
+    {{- range .Values.haraka.stripHeaders.internalHostnamePatterns }}
+    hostname_patterns[]={{ . }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+
   # === Message Limits ===
   limit.ini: |
     [main]
@@ -681,6 +709,11 @@ data:
     {{- if .Values.mail.senderValidation.enabled }}
     # Sender validation for OUTBOUND mail (whitelist/blacklist)
     sender-validation
+    {{- end }}
+
+    {{- if .Values.haraka.stripHeaders.enabled }}
+    # Strip internal/sensitive headers from outgoing mail
+    strip-headers
     {{- end }}
 
     {{- if and .Values.inbound.enabled .Values.inbound.security.spf.enabled }}

@@ -1,0 +1,15 @@
+{
+    "name": "haraka-plugin-strip-headers",
+    "version": "1.0.0",
+    "description": "Haraka plugin to strip internal/sensitive headers from outgoing emails",
+    "main": "index.js",
+    "keywords": [
+        "haraka",
+        "plugin",
+        "headers",
+        "privacy",
+        "security"
+    ],
+    "author": "mail-relay-chart",
+    "license": "MIT"
+}

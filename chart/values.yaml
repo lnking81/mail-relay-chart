@@ -46,6 +46,41 @@ haraka:
   # Queue directory inside container
   queueDir: /data/queue
 
+  # === Strip Internal Headers ===
+  # Remove internal/sensitive headers from outgoing mail
+  # Prevents exposure of internal infrastructure (pod names, internal IPs)
+  stripHeaders:
+    # Enable header stripping
+    enabled: true
+
+    # Remove ALL Received headers (maximum privacy)
+    # Use when you don't want ANY routing history exposed
+    stripAllReceived: false
+
+    # Remove only Received headers with internal information:
+    # - RFC1918 IPs (10.x, 172.16-31.x, 192.168.x)
+    # - Loopback/link-local addresses
+    # - Kubernetes pod/service names
+    # - .local, .internal, .cluster.local domains
+    stripInternalReceived: true
+
+    # Additional headers to always strip (beyond Received)
+    # Common examples: X-Originating-IP, X-Mailer, User-Agent
+    headers: []
+    # Example:
+    # headers:
+    #   - X-Originating-IP
+    #   - X-Mailer
+
+    # Additional regex patterns to detect internal hostnames
+    # Built-in patterns detect Kubernetes pod names, .local, .cluster.local, etc.
+    # Add custom patterns for your infrastructure
+    internalHostnamePatterns: []
+    # Example:
+    # internalHostnamePatterns:
+    #   - "\\.my-internal\\.domain$"
+    #   - "^internal-host-"
+
   # HAProxy PROXY Protocol v1/v2 support
   # Enables preservation of real client IP through load balancers
   #
@@ -238,7 +273,7 @@ adaptiveRate:
     # Minimum delay between messages (ms) - won't go faster than this
     minDelay: 1000
     # Maximum delay between messages (ms) - won't go slower than this
-    maxDelay: 300000  # 5 minutes
+    maxDelay: 300000 # 5 minutes
     # Initial delay when starting (ms)
     initialDelay: 5000
     # Multiply delay by this on failure (1.5 = +50%)
@@ -250,7 +285,7 @@ adaptiveRate:
     # Circuit breaker: rate-limit failures before circuit opens
     circuitBreakerThreshold: 5
     # Circuit breaker: duration to pause all sends (ms)
-    circuitBreakerDuration: 600000  # 10 minutes
+    circuitBreakerDuration: 600000 # 10 minutes
 
   # Per-domain configuration
   # Only domains listed here will have adaptive rate limiting
@@ -265,7 +300,7 @@ adaptiveRate:
       recoveryRate: 0.95 # Slow recovery
       successThreshold: 10 # Need 10 successes to speed up
       circuitBreakerThreshold: 5
-      circuitBreakerDuration: 900000  # 15 minutes for Gmail
+      circuitBreakerDuration: 900000 # 15 minutes for Gmail
 
     # Google Workspace (same infrastructure as Gmail)
     googlemail.com:
@@ -289,7 +324,7 @@ adaptiveRate:
       recoveryRate: 0.9
       successThreshold: 5
       circuitBreakerThreshold: 5
-      circuitBreakerDuration: 900000  # 15 minutes for Microsoft
+      circuitBreakerDuration: 900000 # 15 minutes for Microsoft
 
     hotmail.com:
       enabled: false
