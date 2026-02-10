@@ -408,6 +408,9 @@ data:
     received_header=disabled
     ; IP version preference (default=prefer IPv6, v4=IPv4 first, v6=IPv6 first)
     inet_prefer={{ .Values.haraka.inetPrefer | default "v4" }}
+    ; Allow delivery to MX that resolves to our own IP (required for bounce self-delivery)
+    ; When we send mail, bounces return to bounce+...@our-domain via our own MX
+    local_mx_ok={{ .Values.haraka.localMxOk | default true }}
     {{- if not .Values.mail.relay.enabled }}
     ; Direct delivery to recipient MX
     {{- end }}
