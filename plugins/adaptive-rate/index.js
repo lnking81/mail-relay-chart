@@ -40,11 +40,13 @@ const DELAY = 'DELAY';
  * - haraka_adaptive_rate_delay_ms{domain} - current delay in milliseconds
  * - haraka_adaptive_rate_consecutive_failures{domain} - all deferred errors count
  * - haraka_adaptive_rate_consecutive_rate_limit_failures{domain} - rate limit errors only (controls delay)
+ * - haraka_adaptive_rate_circuit_breaker_open{domain} - 1 if circuit is open, 0 otherwise
  * - haraka_adaptive_rate_deliveries_total{domain} - total delivered messages
  * - haraka_adaptive_rate_deferrals_total{domain} - total deferred messages
  * - haraka_adaptive_rate_bounces_total{domain} - total bounced messages
  * - haraka_adaptive_rate_delays_applied_total{domain} - times delay was applied
  * - haraka_adaptive_rate_rate_limited_total{domain} - explicit rate limit responses (421)
+ * - haraka_adaptive_rate_circuit_breaker_trips_total{domain} - times circuit breaker tripped
  *
  * Note: The label is called "domain" but actually contains MX provider name.
  *
@@ -56,15 +58,25 @@ const DELAY = 'DELAY';
  * - On delivered: delay decreases after threshold successes (recovery)
  * - On send_email: apply delay if time since last send < current delay
  *
+ * CIRCUIT BREAKER:
+ * When consecutive rate-limit failures reach threshold, the "circuit opens":
+ * - All sends to this provider are paused for circuitBreakerDuration
+ * - No connection attempts are made during this period
+ * - This gives the provider time to "cool down"
+ * - After duration expires, circuit closes and normal operation resumes
+ * - First successful delivery also closes the circuit immediately
+ *
  * Configuration (adaptive-rate.ini):
  * [main]
  * enabled = true
  * min_delay = 1000          ; Minimum delay in ms (1 second)
- * max_delay = 60000         ; Maximum delay in ms (60 seconds)
+ * max_delay = 300000        ; Maximum delay in ms (5 minutes)
  * initial_delay = 5000      ; Starting delay in ms (5 seconds)
  * backoff_multiplier = 1.5  ; Multiply delay on failure
  * recovery_rate = 0.9       ; Multiply delay on success (< 1 to speed up)
  * success_threshold = 5     ; Consecutive successes before reducing delay
+ * circuit_breaker_threshold = 5   ; Rate-limit failures before circuit opens
+ * circuit_breaker_duration = 600000 ; Circuit open duration in ms (10 minutes)
  *
  * [domains]
  * gmail.com = true          ; Enable adaptive rate for gmail.com
@@ -89,11 +101,13 @@ let metrics = {
     delayGauge: null,
     failuresGauge: null,
     rateLimitFailuresGauge: null,  // Rate limit specific failures
+    circuitBreakerGauge: null,     // Circuit breaker state (0=closed, 1=open)
     deliveriesCounter: null,
     deferralsCounter: null,
     bouncesCounter: null,
     delaysAppliedCounter: null,
-    rateLimitedCounter: null
+    rateLimitedCounter: null,
+    circuitBreakerTripsCounter: null  // Circuit breaker trip count
 };
 
 /**
@@ -205,6 +219,14 @@ function initMetrics(plugin) {
             registers: [metricsRegistry]
         });
 
+        // Circuit breaker state (Gauge) - 1 if open, 0 if closed
+        metrics.circuitBreakerGauge = new client.Gauge({
+            name: prefix + 'circuit_breaker_open',
+            help: 'Circuit breaker state: 1=open (paused), 0=closed (normal)',
+            labelNames: ['domain'],
+            registers: [metricsRegistry]
+        });
+
         // Deliveries counter (Counter)
         metrics.deliveriesCounter = new client.Counter({
             name: prefix + 'deliveries_total',
@@ -241,6 +263,14 @@ function initMetrics(plugin) {
         metrics.rateLimitedCounter = new client.Counter({
             name: prefix + 'rate_limited_total',
             help: 'Total explicit rate limit responses (421, 4.7.28)',
+            labelNames: ['domain'],
+            registers: [metricsRegistry]
+        });
+
+        // Circuit breaker trips counter (Counter)
+        metrics.circuitBreakerTripsCounter = new client.Counter({
+            name: prefix + 'circuit_breaker_trips_total',
+            help: 'Total times circuit breaker was tripped',
             labelNames: ['domain'],
             registers: [metricsRegistry]
         });
@@ -323,6 +353,9 @@ function updateMetrics(domain, state) {
         metrics.delayGauge.set({ domain }, state.delay);
         metrics.failuresGauge.set({ domain }, state.consecutiveFailures);
         metrics.rateLimitFailuresGauge.set({ domain }, state.consecutiveRateLimitFailures);
+        // Circuit breaker: 1 if open (future timestamp), 0 if closed
+        const isCircuitOpen = state.circuitOpenUntil > Date.now() ? 1 : 0;
+        metrics.circuitBreakerGauge.set({ domain }, isCircuitOpen);
     } catch (err) {
         // Ignore metric errors
     }
@@ -366,11 +399,13 @@ exports.load_config = function () {
         enabled: cfg.main?.enabled !== false,
         metricsPort: parseInt(cfg.main?.metrics_port, 10) || 8081,
         minDelay: parseInt(cfg.main?.min_delay, 10) || 1000,
-        maxDelay: parseInt(cfg.main?.max_delay, 10) || 60000,
+        maxDelay: parseInt(cfg.main?.max_delay, 10) || 300000,  // 5 minutes default
         initialDelay: parseInt(cfg.main?.initial_delay, 10) || 5000,
         backoffMultiplier: parseFloat(cfg.main?.backoff_multiplier) || 1.5,
         recoveryRate: parseFloat(cfg.main?.recovery_rate) || 0.9,
         successThreshold: parseInt(cfg.main?.success_threshold, 10) || 5,
+        circuitBreakerThreshold: parseInt(cfg.main?.circuit_breaker_threshold, 10) || 5,
+        circuitBreakerDuration: parseInt(cfg.main?.circuit_breaker_duration, 10) || 600000,  // 10 minutes
         domains: {},
         domainOverrides: {}
     };
@@ -394,7 +429,9 @@ exports.load_config = function () {
                 initialDelay: parseInt(domainCfg.initial_delay, 10) || config.initialDelay,
                 backoffMultiplier: parseFloat(domainCfg.backoff_multiplier) || config.backoffMultiplier,
                 recoveryRate: parseFloat(domainCfg.recovery_rate) || config.recoveryRate,
-                successThreshold: parseInt(domainCfg.success_threshold, 10) || config.successThreshold
+                successThreshold: parseInt(domainCfg.success_threshold, 10) || config.successThreshold,
+                circuitBreakerThreshold: parseInt(domainCfg.circuit_breaker_threshold, 10) || config.circuitBreakerThreshold,
+                circuitBreakerDuration: parseInt(domainCfg.circuit_breaker_duration, 10) || config.circuitBreakerDuration
             };
         }
     }
@@ -507,8 +544,10 @@ function getState(domain) {
             totalDeferred: 0,
             totalBounced: 0,
             totalRateLimited: 0,              // Total rate limit responses
+            totalCircuitBreakerTrips: 0,      // Total circuit breaker activations
             lastUpdate: Date.now(),
             lastSendTime: 0,           // Track last send time for rate limiting
+            circuitOpenUntil: 0,       // Timestamp when circuit breaker closes (0 = closed)
             lastError: null
         });
     }
@@ -554,6 +593,30 @@ exports.on_send_email = function (next, hmail) {
     const state = getState(mxProvider);
     const cfg = getDomainConfig(mxProvider);
     const now = Date.now();
+
+    // CIRCUIT BREAKER CHECK
+    // If circuit is open, delay ALL sends until it closes
+    if (state.circuitOpenUntil > now) {
+        const remainingPause = state.circuitOpenUntil - now;
+        const delaySeconds = Math.ceil(remainingPause / 1000);
+        plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - pausing ${remainingPause}ms (closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
+
+        // Record metric: delay applied (due to circuit breaker)
+        if (metricsInitialized && metrics.delaysAppliedCounter) {
+            try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+        }
+
+        return next(DELAY, delaySeconds);
+    }
+
+    // Circuit was open but now closed - reset state for fresh start
+    if (state.circuitOpenUntil > 0 && state.circuitOpenUntil <= now) {
+        plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} - resuming normal operation`);
+        state.circuitOpenUntil = 0;
+        state.consecutiveRateLimitFailures = 0;
+        state.delay = cfg.initialDelay;  // Reset delay to initial
+        updateMetrics(mxProvider, state);
+    }
 
     // Calculate time since last send
     const timeSinceLastSend = now - state.lastSendTime;
@@ -623,6 +686,13 @@ exports.on_delivered = function (next, hmail, params) {
     state.consecutiveFailures = 0;
     state.consecutiveRateLimitFailures = 0;  // Reset rate limit streak on success
     state.lastUpdate = Date.now();
+
+    // Close circuit breaker on successful delivery
+    if (state.circuitOpenUntil > 0) {
+        plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} after successful delivery`);
+        state.circuitOpenUntil = 0;
+        state.delay = cfg.initialDelay;  // Reset delay to initial
+    }
 
     // Record metrics
     if (metricsInitialized && metrics.deliveriesCounter) {
@@ -711,6 +781,18 @@ exports.on_deferred = function (next, hmail, params) {
         );
         plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms (rate limit streak: ${state.consecutiveRateLimitFailures})`);
 
+        // CIRCUIT BREAKER: Open circuit if threshold reached
+        if (state.consecutiveRateLimitFailures >= cfg.circuitBreakerThreshold && state.circuitOpenUntil === 0) {
+            state.circuitOpenUntil = Date.now() + cfg.circuitBreakerDuration;
+            state.totalCircuitBreakerTrips++;
+            plugin.logerror(`Adaptive rate: CIRCUIT BREAKER TRIPPED for ${mxProvider} - pausing ALL sends for ${cfg.circuitBreakerDuration / 1000}s (${state.consecutiveRateLimitFailures} consecutive rate limits)`);
+
+            // Record metric: circuit breaker trip
+            if (metricsInitialized && metrics.circuitBreakerTripsCounter) {
+                try { metrics.circuitBreakerTripsCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+            }
+        }
+
         // Record metric: explicit rate limit
         if (metricsInitialized && metrics.rateLimitedCounter) {
             try { metrics.rateLimitedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
@@ -770,7 +852,9 @@ exports.on_bounce = function (next, hmail, err) {
  */
 exports.get_stats = function () {
     const stats = {};
+    const now = Date.now();
     for (const [domain, state] of domainState.entries()) {
+        const isCircuitOpen = state.circuitOpenUntil > now;
         stats[domain] = {
             delay_ms: state.delay,
             consecutive_successes: state.consecutiveSuccesses,
@@ -780,6 +864,10 @@ exports.get_stats = function () {
             total_deferred: state.totalDeferred,
             total_bounced: state.totalBounced,
             total_rate_limited: state.totalRateLimited,
+            circuit_breaker_open: isCircuitOpen,
+            circuit_breaker_closes_at: isCircuitOpen ? new Date(state.circuitOpenUntil).toISOString() : null,
+            circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
+            total_circuit_breaker_trips: state.totalCircuitBreakerTrips,
             last_send_time: state.lastSendTime ? new Date(state.lastSendTime).toISOString() : null,
             last_error: state.lastError,
             last_update: new Date(state.lastUpdate).toISOString()
@@ -794,6 +882,8 @@ exports.get_stats = function () {
 exports.get_domain_stats = function (domain) {
     if (domainState.has(domain)) {
         const state = domainState.get(domain);
+        const now = Date.now();
+        const isCircuitOpen = state.circuitOpenUntil > now;
         return {
             delay_ms: state.delay,
             consecutive_successes: state.consecutiveSuccesses,
@@ -803,6 +893,10 @@ exports.get_domain_stats = function (domain) {
             total_deferred: state.totalDeferred,
             total_bounced: state.totalBounced,
             total_rate_limited: state.totalRateLimited,
+            circuit_breaker_open: isCircuitOpen,
+            circuit_breaker_closes_at: isCircuitOpen ? new Date(state.circuitOpenUntil).toISOString() : null,
+            circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
+            total_circuit_breaker_trips: state.totalCircuitBreakerTrips,
             last_send_time: state.lastSendTime ? new Date(state.lastSendTime).toISOString() : null,
             last_error: state.lastError,
             last_update: new Date(state.lastUpdate).toISOString()
@@ -818,6 +912,24 @@ exports.reset_domain = function (domain) {
     if (domainState.has(domain)) {
         domainState.delete(domain);
         return true;
+    }
+    return false;
+};
+
+/**
+ * Close circuit breaker for a domain (for admin recovery)
+ */
+exports.close_circuit = function (domain) {
+    if (domainState.has(domain)) {
+        const state = domainState.get(domain);
+        const cfg = getDomainConfig(domain);
+        if (state.circuitOpenUntil > 0) {
+            state.circuitOpenUntil = 0;
+            state.consecutiveRateLimitFailures = 0;
+            state.delay = cfg.initialDelay;
+            updateMetrics(domain, state);
+            return true;
+        }
     }
     return false;
 };
@@ -853,15 +965,47 @@ exports.cleanup_stale = function (maxAgeMs = 3600000) { // 1 hour default
  */
 exports.get_problem_domains = function (minFailures = 3) {
     const problems = [];
+    const now = Date.now();
     for (const [domain, state] of domainState.entries()) {
-        if (state.consecutiveFailures >= minFailures) {
+        const isCircuitOpen = state.circuitOpenUntil > now;
+        if (state.consecutiveFailures >= minFailures || isCircuitOpen) {
             problems.push({
                 domain,
                 consecutive_failures: state.consecutiveFailures,
+                consecutive_rate_limit_failures: state.consecutiveRateLimitFailures,
                 delay_ms: state.delay,
+                circuit_breaker_open: isCircuitOpen,
+                circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
                 last_error: state.lastError
             });
         }
     }
-    return problems.sort((a, b) => b.consecutive_failures - a.consecutive_failures);
+    return problems.sort((a, b) => {
+        // Sort by circuit breaker status first, then by failures
+        if (a.circuit_breaker_open !== b.circuit_breaker_open) {
+            return a.circuit_breaker_open ? -1 : 1;
+        }
+        return b.consecutive_failures - a.consecutive_failures;
+    });
+};
+
+/**
+ * Get list of domains with open circuit breakers (for alerting)
+ */
+exports.get_open_circuits = function () {
+    const circuits = [];
+    const now = Date.now();
+    for (const [domain, state] of domainState.entries()) {
+        if (state.circuitOpenUntil > now) {
+            circuits.push({
+                domain,
+                closes_at: new Date(state.circuitOpenUntil).toISOString(),
+                remaining_ms: state.circuitOpenUntil - now,
+                remaining_seconds: Math.ceil((state.circuitOpenUntil - now) / 1000),
+                total_trips: state.totalCircuitBreakerTrips,
+                last_error: state.lastError
+            });
+        }
+    }
+    return circuits.sort((a, b) => a.remaining_ms - b.remaining_ms);
 };

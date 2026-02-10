@@ -789,28 +789,15 @@ data:
     backoff_multiplier={{ .Values.adaptiveRate.defaults.backoffMultiplier }}
     recovery_rate={{ .Values.adaptiveRate.defaults.recoveryRate }}
     success_threshold={{ .Values.adaptiveRate.defaults.successThreshold }}
+    circuit_breaker_threshold={{ .Values.adaptiveRate.defaults.circuitBreakerThreshold }}
+    circuit_breaker_duration={{ .Values.adaptiveRate.defaults.circuitBreakerDuration }}
 
     [domains]
-    {{- /* Gmail */ -}}
-    {{- if (index .Values.adaptiveRate.domains "gmail.com").enabled }}
-    gmail.com=true
+    {{- /* Built-in domains */ -}}
+    {{- range $domain, $config := .Values.adaptiveRate.domains }}
+    {{- if $config.enabled }}
+    {{ $domain }}=true
     {{- end }}
-    {{- if (index .Values.adaptiveRate.domains "googlemail.com").enabled }}
-    googlemail.com=true
-    {{- end }}
-    {{- /* Microsoft */ -}}
-    {{- if (index .Values.adaptiveRate.domains "outlook.com").enabled }}
-    outlook.com=true
-    {{- end }}
-    {{- if (index .Values.adaptiveRate.domains "hotmail.com").enabled }}
-    hotmail.com=true
-    {{- end }}
-    {{- if (index .Values.adaptiveRate.domains "live.com").enabled }}
-    live.com=true
-    {{- end }}
-    {{- /* Yahoo */ -}}
-    {{- if (index .Values.adaptiveRate.domains "yahoo.com").enabled }}
-    yahoo.com=true
     {{- end }}
     {{- /* Custom domains */ -}}
     {{- range $domain, $config := .Values.adaptiveRate.customDomains }}
@@ -824,78 +811,41 @@ data:
     {{- end }}
 
     {{- /* Per-domain overrides */ -}}
-    {{- if (index .Values.adaptiveRate.domains "gmail.com").enabled }}
-    [gmail.com]
-    min_delay={{ (index .Values.adaptiveRate.domains "gmail.com").minDelay }}
-    max_delay={{ (index .Values.adaptiveRate.domains "gmail.com").maxDelay }}
-    initial_delay={{ (index .Values.adaptiveRate.domains "gmail.com").initialDelay }}
-    {{- with (index .Values.adaptiveRate.domains "gmail.com").backoffMultiplier }}
+    {{- range $domain, $config := .Values.adaptiveRate.domains }}
+    {{- if $config.enabled }}
+
+    [{{ $domain }}]
+    {{- with $config.minDelay }}
+    min_delay={{ . }}
+    {{- end }}
+    {{- with $config.maxDelay }}
+    max_delay={{ . }}
+    {{- end }}
+    {{- with $config.initialDelay }}
+    initial_delay={{ . }}
+    {{- end }}
+    {{- with $config.backoffMultiplier }}
     backoff_multiplier={{ . }}
     {{- end }}
-    {{- with (index .Values.adaptiveRate.domains "gmail.com").recoveryRate }}
+    {{- with $config.recoveryRate }}
     recovery_rate={{ . }}
     {{- end }}
-    {{- with (index .Values.adaptiveRate.domains "gmail.com").successThreshold }}
+    {{- with $config.successThreshold }}
     success_threshold={{ . }}
     {{- end }}
+    {{- with $config.circuitBreakerThreshold }}
+    circuit_breaker_threshold={{ . }}
     {{- end }}
-
-    {{- if (index .Values.adaptiveRate.domains "googlemail.com").enabled }}
-    [googlemail.com]
-    min_delay={{ (index .Values.adaptiveRate.domains "googlemail.com").minDelay }}
-    max_delay={{ (index .Values.adaptiveRate.domains "googlemail.com").maxDelay }}
-    initial_delay={{ (index .Values.adaptiveRate.domains "googlemail.com").initialDelay }}
-    {{- with (index .Values.adaptiveRate.domains "googlemail.com").backoffMultiplier }}
-    backoff_multiplier={{ . }}
-    {{- end }}
-    {{- with (index .Values.adaptiveRate.domains "googlemail.com").recoveryRate }}
-    recovery_rate={{ . }}
-    {{- end }}
-    {{- with (index .Values.adaptiveRate.domains "googlemail.com").successThreshold }}
-    success_threshold={{ . }}
+    {{- with $config.circuitBreakerDuration }}
+    circuit_breaker_duration={{ . }}
     {{- end }}
     {{- end }}
-
-    {{- if (index .Values.adaptiveRate.domains "outlook.com").enabled }}
-    [outlook.com]
-    min_delay={{ (index .Values.adaptiveRate.domains "outlook.com").minDelay }}
-    max_delay={{ (index .Values.adaptiveRate.domains "outlook.com").maxDelay }}
-    initial_delay={{ (index .Values.adaptiveRate.domains "outlook.com").initialDelay }}
-    {{- with (index .Values.adaptiveRate.domains "outlook.com").backoffMultiplier }}
-    backoff_multiplier={{ . }}
-    {{- end }}
-    {{- with (index .Values.adaptiveRate.domains "outlook.com").recoveryRate }}
-    recovery_rate={{ . }}
-    {{- end }}
-    {{- with (index .Values.adaptiveRate.domains "outlook.com").successThreshold }}
-    success_threshold={{ . }}
-    {{- end }}
-    {{- end }}
-
-    {{- if (index .Values.adaptiveRate.domains "hotmail.com").enabled }}
-    [hotmail.com]
-    min_delay={{ (index .Values.adaptiveRate.domains "hotmail.com").minDelay }}
-    max_delay={{ (index .Values.adaptiveRate.domains "hotmail.com").maxDelay }}
-    initial_delay={{ (index .Values.adaptiveRate.domains "hotmail.com").initialDelay }}
-    {{- end }}
-
-    {{- if (index .Values.adaptiveRate.domains "live.com").enabled }}
-    [live.com]
-    min_delay={{ (index .Values.adaptiveRate.domains "live.com").minDelay }}
-    max_delay={{ (index .Values.adaptiveRate.domains "live.com").maxDelay }}
-    initial_delay={{ (index .Values.adaptiveRate.domains "live.com").initialDelay }}
-    {{- end }}
-
-    {{- if (index .Values.adaptiveRate.domains "yahoo.com").enabled }}
-    [yahoo.com]
-    min_delay={{ (index .Values.adaptiveRate.domains "yahoo.com").minDelay }}
-    max_delay={{ (index .Values.adaptiveRate.domains "yahoo.com").maxDelay }}
-    initial_delay={{ (index .Values.adaptiveRate.domains "yahoo.com").initialDelay }}
     {{- end }}
 
     {{- /* Custom domain overrides */ -}}
     {{- range $domain, $config := .Values.adaptiveRate.customDomains }}
     {{- if $config.enabled }}
+
     {{- if eq $domain "*" }}
     [__all__]
     {{- else }}
@@ -918,6 +868,12 @@ data:
     {{- end }}
     {{- with $config.successThreshold }}
     success_threshold={{ . }}
+    {{- end }}
+    {{- with $config.circuitBreakerThreshold }}
+    circuit_breaker_threshold={{ . }}
+    {{- end }}
+    {{- with $config.circuitBreakerDuration }}
+    circuit_breaker_duration={{ . }}
     {{- end }}
     {{- end }}
     {{- end }}
