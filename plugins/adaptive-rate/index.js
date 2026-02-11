@@ -441,6 +441,7 @@ exports.load_config = function () {
 
 /**
  * Check if domain should have adaptive rate limiting
+ * Also checks mapped provider (e.g., gmail.com -> google.com)
  */
 function isDomainEnabled(domain) {
     if (!domain) return false;
@@ -450,6 +451,10 @@ function isDomainEnabled(domain) {
 
     // Check exact match
     if (config.domains[domain]) return true;
+
+    // Check mapped provider (e.g., gmail.com -> google.com)
+    const mappedProvider = KNOWN_PROVIDER_MAPPINGS[domain];
+    if (mappedProvider && config.domains[mappedProvider]) return true;
 
     // Check parent domains (e.g., mail.google.com -> google.com)
     const parts = domain.split('.');
@@ -479,14 +484,48 @@ function normalizeMxProvider(mxHost) {
     return mxHost.toLowerCase();
 }
 
+// Hardcoded mapping from common recipient domains to their MX providers
+// This ensures consistent rate limiting even before MX is resolved
+const KNOWN_PROVIDER_MAPPINGS = {
+    // Google
+    'gmail.com': 'google.com',
+    'googlemail.com': 'google.com',
+    // Microsoft
+    'hotmail.com': 'outlook.com',
+    'live.com': 'outlook.com',
+    'msn.com': 'outlook.com',
+    'outlook.com': 'outlook.com',
+    // Yahoo
+    'yahoo.com': 'yahoo.com',
+    'ymail.com': 'yahoo.com',
+    'rocketmail.com': 'yahoo.com',
+    // iCloud
+    'icloud.com': 'icloud.com',
+    'me.com': 'icloud.com',
+    'mac.com': 'icloud.com',
+    // AOL (owned by Yahoo)
+    'aol.com': 'yahoo.com',
+    // Mail.ru
+    'mail.ru': 'mail.ru',
+    'inbox.ru': 'mail.ru',
+    'list.ru': 'mail.ru',
+    'bk.ru': 'mail.ru',
+    // Yandex
+    'yandex.ru': 'yandex.ru',
+    'yandex.com': 'yandex.ru',
+    'ya.ru': 'yandex.ru',
+};
+
 // Cache mapping from recipient domain to MX provider
 // Used in send_email hook where MX isn't known yet
 const domainToMxCache = new Map();
 
 /**
  * Get MX provider for rate limiting, with caching
+ * Uses hardcoded mappings for known providers, then cache, then MX lookup result
  */
 function getMxProvider(recipientDomain, mxHost) {
+    // If MX host is provided, normalize it and cache the mapping
     if (mxHost) {
         const provider = normalizeMxProvider(mxHost);
         if (provider) {
@@ -496,23 +535,41 @@ function getMxProvider(recipientDomain, mxHost) {
         }
     }
 
-    // Try cache
+    // Check hardcoded mappings first (most reliable)
+    if (KNOWN_PROVIDER_MAPPINGS[recipientDomain]) {
+        return KNOWN_PROVIDER_MAPPINGS[recipientDomain];
+    }
+
+    // Try cache (populated from previous MX lookups)
     if (domainToMxCache.has(recipientDomain)) {
         return domainToMxCache.get(recipientDomain);
     }
 
-    // Fallback to recipient domain
+    // Fallback to recipient domain (will be corrected on first delivery/deferral)
     return recipientDomain;
 }
 
 /**
  * Get configuration for specific domain
  */
+/**
+ * Get configuration for specific domain
+ * Also checks mapped provider for overrides
+ */
 function getDomainConfig(domain) {
     // Check for domain-specific override first
     if (config.domainOverrides[domain]) {
         return config.domainOverrides[domain];
     }
+
+    // Check mapped provider override (e.g., state is 'google.com', check 'gmail.com' config)
+    // This supports users who configured 'gmail.com' in values.yaml
+    for (const [recipientDomain, provider] of Object.entries(KNOWN_PROVIDER_MAPPINGS)) {
+        if (provider === domain && config.domainOverrides[recipientDomain]) {
+            return config.domainOverrides[recipientDomain];
+        }
+    }
+
     // Check for wildcard override (__all__)
     if (config.domainOverrides['__all__']) {
         return config.domainOverrides['__all__'];
@@ -613,13 +670,13 @@ exports.on_send_email = function (next, hmail) {
         return next(DELAY, delaySeconds);
     }
 
-    // Circuit was open but now closed - reset state for fresh start
+    // Circuit was open but now closed - gradual recovery, NOT full reset
     if (state.circuitOpenUntil > 0 && state.circuitOpenUntil <= now) {
-        plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} - resuming normal operation`);
+        plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} - starting gradual recovery (delay: ${state.delay}ms, will decrease on successes)`);
         state.circuitOpenUntil = 0;
-        state.consecutiveRateLimitFailures = 0;
-        state.noSendUntil = 0;  // Also clear immediate pause
-        state.delay = cfg.initialDelay;  // Reset delay to initial
+        // DO NOT reset consecutiveRateLimitFailures - require successes to clear it
+        // DO NOT reset delay - keep high delay, let successful deliveries reduce it gradually
+        state.noSendUntil = 0;  // Clear immediate pause to allow sending
         updateMetrics(mxProvider, state);
     }
 
@@ -702,23 +759,30 @@ exports.on_delivered = function (next, hmail, params) {
 
     const state = getState(mxProvider);
     const cfg = getDomainConfig(mxProvider);
+    const now = Date.now();
 
     state.totalDelivered++;
     state.consecutiveSuccesses++;
     state.consecutiveFailures = 0;
-    state.consecutiveRateLimitFailures = 0;  // Reset rate limit streak on success
-    state.lastUpdate = Date.now();
+    state.lastUpdate = now;
 
-    // Close circuit breaker and clear immediate pause on successful delivery
-    if (state.circuitOpenUntil > 0) {
-        plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} after successful delivery`);
-        state.circuitOpenUntil = 0;
-        state.delay = cfg.initialDelay;  // Reset delay to initial
+    // CRITICAL: Do NOT reset rate limit state if circuit breaker is active
+    // This prevents race condition where parallel in-flight deliveries
+    // (sent BEFORE rate-limit was detected) reset the protection
+    const isCircuitActive = state.circuitOpenUntil > now;
+    const isPauseActive = state.noSendUntil > now;
+
+    if (isCircuitActive) {
+        // Circuit is open - do NOT close it early, let it expire naturally
+        // This prevents race condition with parallel deliveries
+        plugin.logdebug(`Adaptive rate: ${mxProvider} delivered while circuit OPEN - ignoring (circuit closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
+        // Still count successes, will be used when circuit naturally closes
+    } else if (isPauseActive) {
+        // Immediate pause is active - do NOT clear it
+        plugin.logdebug(`Adaptive rate: ${mxProvider} delivered while PAUSED - ignoring (pause ends at ${new Date(state.noSendUntil).toISOString()})`);
     }
-    // Clear immediate pause on success
-    if (state.noSendUntil > 0) {
-        state.noSendUntil = 0;
-    }
+    // NOTE: Do NOT reset consecutiveRateLimitFailures on single success!
+    // Require multiple successes (threshold) to reset streak - see below
 
     // Record metrics
     if (metricsInitialized && metrics.deliveriesCounter) {
@@ -726,22 +790,27 @@ exports.on_delivered = function (next, hmail, params) {
     }
     updateMetrics(mxProvider, state);
 
-    // Reduce delay after threshold consecutive successes
-    if (state.consecutiveSuccesses >= cfg.successThreshold) {
+    // Reduce delay AND reset streak after threshold consecutive successes
+    // BUT only if no active protection (circuit breaker or pause)
+    if (!isCircuitActive && !isPauseActive && state.consecutiveSuccesses >= cfg.successThreshold) {
         const oldDelay = state.delay;
+        const oldStreak = state.consecutiveRateLimitFailures;
+
         state.delay = Math.max(
             Math.floor(state.delay * cfg.recoveryRate),
             cfg.minDelay
         );
+        // Reset streak only after proving we can send successfully
+        state.consecutiveRateLimitFailures = Math.max(0, state.consecutiveRateLimitFailures - cfg.successThreshold);
         state.consecutiveSuccesses = 0;
 
-        if (oldDelay !== state.delay) {
-            plugin.loginfo(`Adaptive rate: ${mxProvider} delay reduced ${oldDelay}ms -> ${state.delay}ms (${cfg.successThreshold} consecutive successes)`);
+        if (oldDelay !== state.delay || oldStreak !== state.consecutiveRateLimitFailures) {
+            plugin.loginfo(`Adaptive rate: ${mxProvider} recovery - delay ${oldDelay}ms -> ${state.delay}ms, streak ${oldStreak} -> ${state.consecutiveRateLimitFailures} (${cfg.successThreshold} consecutive successes)`);
             updateMetrics(mxProvider, state);
         }
     }
 
-    plugin.logdebug(`Adaptive rate: ${mxProvider} delivered (total: ${state.totalDelivered}, streak: ${state.consecutiveSuccesses})`);
+    plugin.logdebug(`Adaptive rate: ${mxProvider} delivered (total: ${state.totalDelivered}, streak: ${state.consecutiveSuccesses}, circuitActive: ${isCircuitActive}, pauseActive: ${isPauseActive})`);
     next();
 };
 
@@ -813,15 +882,25 @@ exports.on_deferred = function (next, hmail, params) {
         state.noSendUntil = Date.now() + state.delay;
         plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms, PAUSED until ${new Date(state.noSendUntil).toISOString()} (rate limit streak: ${state.consecutiveRateLimitFailures})`);
 
-        // CIRCUIT BREAKER: Open circuit if threshold reached
-        if (state.consecutiveRateLimitFailures >= cfg.circuitBreakerThreshold && state.circuitOpenUntil === 0) {
-            state.circuitOpenUntil = Date.now() + cfg.circuitBreakerDuration;
-            state.totalCircuitBreakerTrips++;
-            plugin.logerror(`Adaptive rate: CIRCUIT BREAKER TRIPPED for ${mxProvider} - pausing ALL sends for ${cfg.circuitBreakerDuration / 1000}s (${state.consecutiveRateLimitFailures} consecutive rate limits)`);
+        // CIRCUIT BREAKER: Open or EXTEND circuit on continued rate-limits
+        if (state.consecutiveRateLimitFailures >= cfg.circuitBreakerThreshold) {
+            const newCircuitEnd = Date.now() + cfg.circuitBreakerDuration;
+            const wasOpen = state.circuitOpenUntil > Date.now();
 
-            // Record metric: circuit breaker trip
-            if (metricsInitialized && metrics.circuitBreakerTripsCounter) {
-                try { metrics.circuitBreakerTripsCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+            if (!wasOpen) {
+                // First trip - open circuit
+                state.circuitOpenUntil = newCircuitEnd;
+                state.totalCircuitBreakerTrips++;
+                plugin.logerror(`Adaptive rate: CIRCUIT BREAKER TRIPPED for ${mxProvider} - pausing ALL sends for ${cfg.circuitBreakerDuration / 1000}s (${state.consecutiveRateLimitFailures} consecutive rate limits)`);
+
+                // Record metric: circuit breaker trip
+                if (metricsInitialized && metrics.circuitBreakerTripsCounter) {
+                    try { metrics.circuitBreakerTripsCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+                }
+            } else {
+                // Circuit already open - EXTEND it (rate-limits still coming from in-flight messages)
+                state.circuitOpenUntil = newCircuitEnd;
+                plugin.logwarn(`Adaptive rate: Circuit EXTENDED for ${mxProvider} - still receiving rate-limits (streak: ${state.consecutiveRateLimitFailures}), new close time: ${new Date(newCircuitEnd).toISOString()}`);
             }
         }
 
