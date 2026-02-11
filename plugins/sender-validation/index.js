@@ -70,6 +70,9 @@ exports.load_inbound_config = function () {
 
     this.inbound_enabled = inbound_cfg.main && inbound_cfg.main.enabled !== false;
 
+    // Get bounce prefix from [main] section (same as rcpt-to-inbound plugin)
+    this.bounce_prefix = (inbound_cfg.main && inbound_cfg.main.bounce_prefix) || 'bounce';
+
     // Our inbound domains
     this.inbound_domains = new Set();
     if (inbound_cfg.domains) {
@@ -80,9 +83,11 @@ exports.load_inbound_config = function () {
         }
     }
 
-    // Inbound recipients (postmaster, dmarc, bounce+, etc.)
+    // Inbound recipients (postmaster, dmarc, etc.) - exact matches only
     this.inbound_recipients = new Set();
-    this.inbound_prefixes = [];
+    // Inbound prefixes - always include bounce prefix from [main]
+    this.inbound_prefixes = [`${this.bounce_prefix}+`];
+
     if (inbound_cfg.recipients) {
         for (const [rcpt, enabled] of Object.entries(inbound_cfg.recipients)) {
             if (enabled === 'true' || enabled === true) {
@@ -186,7 +191,23 @@ exports.check_whitelist_on_rcpt = function (next, connection, params) {
         return next();
     }
 
-    // Check whitelist
+    // =========================================================================
+    // LOOP DETECTION (FIRST!): Block VERP addresses from being relayed to EXTERNAL
+    // If sender is bounce+...@domain and recipient is NOT inbound,
+    // this is likely a mail loop or misconfiguration
+    // This check MUST happen BEFORE whitelist check!
+    // =========================================================================
+    if (sender_address.match(/^bounce\+/i)) {
+        connection.logwarn(this, `LOOP BLOCKED: Rejecting relay from VERP sender ${sender_address} to external ${rcpt_address}`);
+        connection.transaction.results.add(this, {
+            fail: 'loop_detected',
+            sender: sender_address,
+            recipient: rcpt_address,
+        });
+        return next(DENY, `Mail loop detected: bounce messages cannot be relayed to external addresses`);
+    }
+
+    // Check whitelist (only for non-VERP senders)
     if (this.is_whitelisted(sender_address, sender_domain)) {
         connection.loginfo(this, `Sender ${sender_address} whitelisted for outbound to ${rcpt_address}`);
         return next();

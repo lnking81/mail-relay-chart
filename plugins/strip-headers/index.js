@@ -225,8 +225,14 @@ exports.strip_headers = function (next, connection) {
             }
         }
 
-        // Strip other configured headers
+        // Strip other configured headers (except loop detection headers)
+        const protected_headers = ['x-haraka-loop-count', 'x-haraka-loop-detected'];
         for (const header of config.headers_to_strip) {
+            // Don't strip loop detection headers
+            if (protected_headers.includes(header.toLowerCase())) {
+                plugin.logdebug(`Skipping protected header: ${header}`);
+                continue;
+            }
             const values = transaction.header.get_all(header);
             if (values && values.length > 0) {
                 transaction.remove_header(header);

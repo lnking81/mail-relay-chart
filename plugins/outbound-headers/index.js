@@ -177,7 +177,68 @@ exports.add_tracking_headers = function (next, connection) {
         return next();
     }
 
+    // Only process relay (outbound) connections
+    if (!connection.relaying) {
+        plugin.logdebug('Skipping outbound headers for non-relay connection');
+        return next();
+    }
+
+    // =========================================================================
+    // INBOUND DETECTION: Skip processing for inbound messages
+    // rcpt-to-inbound plugin marks messages to bounce+, fbl@, etc. as inbound
+    // These should NOT get VERP processing - they need to go to inbound-handler
+    // =========================================================================
+    const inbound_type = transaction.notes.inbound_type;
+    if (inbound_type) {
+        plugin.loginfo(`Skipping outbound headers for INBOUND message (type: ${inbound_type})`);
+        return next();
+    }
+
+    // Also check if this is marked as inbound by sender-validation
+    if (transaction.notes.is_inbound) {
+        plugin.loginfo('Skipping outbound headers for message marked as inbound');
+        return next();
+    }
+
     try {
+        // =====================================================================
+        // LOOP DETECTION: Check if this message already passed through us
+        // This catches cases where inbound detection failed
+        // =====================================================================
+        const current_mail_from = transaction.mail_from ? transaction.mail_from.original : '';
+
+        // Check if mail_from is already a VERP address (bounce+...)
+        // If we reach here with VERP mail_from, it means:
+        // - rcpt-to-inbound didn't mark it as inbound (recipient not our domain?)
+        // - This is likely a mail loop or misconfiguration
+        const verp_pattern = new RegExp(`^<?${config.bounce_prefix}\\+`, 'i');
+        if (verp_pattern.test(current_mail_from)) {
+            plugin.logwarn(`LOOP DETECTED: mail_from has VERP prefix but not marked as inbound: ${current_mail_from}`);
+            plugin.logwarn('Rejecting to prevent mail loop - check rcpt-to-inbound domain config');
+
+            // Add header for debugging
+            transaction.add_header('X-Haraka-Loop-Detected', 'true');
+
+            return next(DENY, 'Mail loop detected: VERP message not recognized as inbound');
+        }
+
+        // Check for loop detection header (backup protection)
+        const loop_count_header = transaction.header.get('X-Haraka-Loop-Count');
+        const loop_count = loop_count_header ? parseInt(loop_count_header.trim(), 10) : 0;
+
+        if (loop_count >= 3) {
+            plugin.logwarn(`LOOP DETECTED: X-Haraka-Loop-Count=${loop_count} >= 3`);
+            return next(DENY, 'Mail loop detected: message passed through relay too many times');
+        }
+
+        // Increment loop counter for outbound messages
+        transaction.remove_header('X-Haraka-Loop-Count');
+        transaction.add_header('X-Haraka-Loop-Count', String(loop_count + 1));
+
+        // =====================================================================
+        // Normal OUTBOUND processing
+        // =====================================================================
+
         // Get message ID from client header or fall back to queue_id
         let message_id = transaction.header.get(config.client_id_header);
 
