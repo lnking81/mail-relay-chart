@@ -673,7 +673,7 @@ data:
               }
             ]
           },
-          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+          "gridPos": { "h": 8, "w": 6, "x": 0, "y": 28 },
           "id": 41,
           "options": {
             "cellHeight": "sm",
@@ -695,7 +695,7 @@ data:
             {
               "id": "organize",
               "options": {
-                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true },
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true, "container": true, "endpoint": true, "hostname": true, "pod": true, "service": true },
                 "indexByName": {},
                 "renameByName": { "domain": "Domain", "Value": "Delay" }
               }
@@ -734,7 +734,7 @@ data:
               }
             ]
           },
-          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+          "gridPos": { "h": 8, "w": 6, "x": 6, "y": 28 },
           "id": 42,
           "options": {
             "cellHeight": "sm",
@@ -756,7 +756,7 @@ data:
             {
               "id": "organize",
               "options": {
-                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true },
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true, "container": true, "endpoint": true, "hostname": true, "pod": true, "service": true },
                 "indexByName": {},
                 "renameByName": { "domain": "Domain", "Value": "Streak" }
               }
@@ -795,7 +795,7 @@ data:
               }
             ]
           },
-          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 28 },
           "id": 43,
           "options": {
             "cellHeight": "sm",
@@ -817,9 +817,68 @@ data:
             {
               "id": "organize",
               "options": {
-                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true },
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true, "container": true, "endpoint": true, "hostname": true, "pod": true, "service": true },
                 "indexByName": {},
                 "renameByName": { "domain": "Domain", "Value": "Count" }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Domains with open circuit breaker (all sends paused)",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "color-background" },
+                "filterable": true,
+                "inspect": false
+              },
+              "mappings": [
+                { "options": { "1": { "color": "red", "index": 0, "text": "OPEN" } }, "type": "value" }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "red", "value": null }
+              ]},
+              "unit": "short"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Domain" },
+                "properties": [
+                  { "id": "custom.width", "value": 200 },
+                  { "id": "custom.cellOptions", "value": { "type": "auto" } }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 28 },
+          "id": 96,
+          "options": {
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "haraka_adaptive_rate_circuit_breaker_open{namespace=~\"$namespace\", release=~\"$release\"} == 1",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
+            "refId": "A"
+          }],
+          "title": "Open Circuits by Domain",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true, "container": true, "endpoint": true, "hostname": true, "pod": true, "service": true, "Value": true },
+                "indexByName": {},
+                "renameByName": { "domain": "Domain" }
               }
             }
           ],
