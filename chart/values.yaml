@@ -34,6 +34,10 @@ haraka:
   # Example: ["spf", "headers"]
   plugins: []
 
+  # Log level: debug, info, notice, warn, error, crit
+  # Use 'info' for production, 'debug' for troubleshooting
+  logLevel: info
+
   # Outbound connection concurrency
   concurrency: 50
 

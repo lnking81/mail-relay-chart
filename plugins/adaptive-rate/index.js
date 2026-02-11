@@ -548,6 +548,7 @@ function getState(domain) {
             lastUpdate: Date.now(),
             lastSendTime: 0,           // Track last send time for rate limiting
             circuitOpenUntil: 0,       // Timestamp when circuit breaker closes (0 = closed)
+            noSendUntil: 0,            // Immediate pause until timestamp (set on rate limit)
             lastError: null
         });
     }
@@ -581,12 +582,15 @@ exports.on_send_email = function (next, hmail) {
 
     const recipientDomain = hmail.todo.domain;
 
-    if (!isDomainEnabled(recipientDomain)) {
+    // Get MX provider FIRST (from cache or fallback to recipient domain)
+    // This is critical: config may have 'google.com' but recipient is 'gmail.com'
+    const mxProvider = getMxProvider(recipientDomain, null);
+
+    // Check if either MX provider OR recipient domain is enabled
+    // This ensures gmail.com -> google.com mapping is considered
+    if (!isDomainEnabled(mxProvider) && !isDomainEnabled(recipientDomain)) {
         return next();
     }
-
-    // Get MX provider (from cache or fallback to recipient domain)
-    const mxProvider = getMxProvider(recipientDomain, null);
 
     plugin.logdebug(`on_send_email: recipient=${recipientDomain}, mxProvider=${mxProvider}`);
 
@@ -614,8 +618,24 @@ exports.on_send_email = function (next, hmail) {
         plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} - resuming normal operation`);
         state.circuitOpenUntil = 0;
         state.consecutiveRateLimitFailures = 0;
+        state.noSendUntil = 0;  // Also clear immediate pause
         state.delay = cfg.initialDelay;  // Reset delay to initial
         updateMetrics(mxProvider, state);
+    }
+
+    // IMMEDIATE PAUSE CHECK (softer than circuit breaker, set on each rate limit)
+    // This ensures immediate throttling even before circuit breaker threshold is reached
+    if (state.noSendUntil > now) {
+        const remainingPause = state.noSendUntil - now;
+        const delaySeconds = Math.ceil(remainingPause / 1000);
+        plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - delaying ${remainingPause}ms (rate limit backoff, streak: ${state.consecutiveRateLimitFailures})`);
+
+        // Record metric: delay applied
+        if (metricsInitialized && metrics.delaysAppliedCounter) {
+            try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+        }
+
+        return next(DELAY, delaySeconds);
     }
 
     // Calculate time since last send
@@ -668,13 +688,15 @@ exports.on_delivered = function (next, hmail, params) {
 
     const recipientDomain = hmail.todo.domain;
 
-    if (!isDomainEnabled(recipientDomain)) {
-        return next();
-    }
-
     // Get MX host from params (first element is MX hostname)
+    // Resolve mxProvider BEFORE isDomainEnabled check
     const mxHost = params?.[0] || null;
     const mxProvider = getMxProvider(recipientDomain, mxHost);
+
+    // Check if either MX provider OR recipient domain is enabled
+    if (!isDomainEnabled(mxProvider) && !isDomainEnabled(recipientDomain)) {
+        return next();
+    }
 
     plugin.logdebug(`on_delivered: recipient=${recipientDomain}, mx_host=${mxHost}, mxProvider=${mxProvider}`);
 
@@ -687,11 +709,15 @@ exports.on_delivered = function (next, hmail, params) {
     state.consecutiveRateLimitFailures = 0;  // Reset rate limit streak on success
     state.lastUpdate = Date.now();
 
-    // Close circuit breaker on successful delivery
+    // Close circuit breaker and clear immediate pause on successful delivery
     if (state.circuitOpenUntil > 0) {
         plugin.loginfo(`Adaptive rate: Circuit CLOSED for ${mxProvider} after successful delivery`);
         state.circuitOpenUntil = 0;
         state.delay = cfg.initialDelay;  // Reset delay to initial
+    }
+    // Clear immediate pause on success
+    if (state.noSendUntil > 0) {
+        state.noSendUntil = 0;
     }
 
     // Record metrics
@@ -739,14 +765,16 @@ exports.on_deferred = function (next, hmail, params) {
     const recipientDomain = hmail.todo.domain;
     const errMsg = params?.err?.message || params?.err || String(params?.err || '');
 
-    if (!isDomainEnabled(recipientDomain)) {
-        return next();
-    }
-
     // Get MX host from params or hmail
     // In deferred hook, MX might be in params.host or hmail.todo.mxlist
+    // Resolve mxProvider BEFORE isDomainEnabled check
     const mxHost = params?.host || hmail?.todo?.mxlist?.[0]?.exchange || null;
     const mxProvider = getMxProvider(recipientDomain, mxHost);
+
+    // Check if either MX provider OR recipient domain is enabled
+    if (!isDomainEnabled(mxProvider) && !isDomainEnabled(recipientDomain)) {
+        return next();
+    }
 
     plugin.logdebug(`on_deferred: recipient=${recipientDomain}, mx_host=${mxHost}, mxProvider=${mxProvider}, err=${errMsg.substring(0, 100)}`);
 
@@ -779,7 +807,11 @@ exports.on_deferred = function (next, hmail, params) {
             Math.floor(state.delay * cfg.backoffMultiplier),
             cfg.maxDelay
         );
-        plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms (rate limit streak: ${state.consecutiveRateLimitFailures})`);
+
+        // IMMEDIATE PAUSE: Set hard pause timestamp based on current delay
+        // This blocks ALL sends to this provider until pause expires
+        state.noSendUntil = Date.now() + state.delay;
+        plugin.logwarn(`Adaptive rate: ${mxProvider} RATE LIMITED - delay ${oldDelay}ms -> ${state.delay}ms, PAUSED until ${new Date(state.noSendUntil).toISOString()} (rate limit streak: ${state.consecutiveRateLimitFailures})`);
 
         // CIRCUIT BREAKER: Open circuit if threshold reached
         if (state.consecutiveRateLimitFailures >= cfg.circuitBreakerThreshold && state.circuitOpenUntil === 0) {
@@ -824,13 +856,15 @@ exports.on_bounce = function (next, hmail, err) {
 
     const recipientDomain = hmail.todo.domain;
 
-    if (!isDomainEnabled(recipientDomain)) {
-        return next();
-    }
-
     // Get MX host from hmail (bounce may not have it readily available)
+    // Resolve mxProvider BEFORE isDomainEnabled check
     const mxHost = hmail?.todo?.mxlist?.[0]?.exchange || null;
     const mxProvider = getMxProvider(recipientDomain, mxHost);
+
+    // Check if either MX provider OR recipient domain is enabled
+    if (!isDomainEnabled(mxProvider) && !isDomainEnabled(recipientDomain)) {
+        return next();
+    }
 
     plugin.logdebug(`on_bounce: recipient=${recipientDomain}, mxProvider=${mxProvider}`);
 
@@ -855,6 +889,7 @@ exports.get_stats = function () {
     const now = Date.now();
     for (const [domain, state] of domainState.entries()) {
         const isCircuitOpen = state.circuitOpenUntil > now;
+        const isPaused = state.noSendUntil > now;
         stats[domain] = {
             delay_ms: state.delay,
             consecutive_successes: state.consecutiveSuccesses,
@@ -864,6 +899,9 @@ exports.get_stats = function () {
             total_deferred: state.totalDeferred,
             total_bounced: state.totalBounced,
             total_rate_limited: state.totalRateLimited,
+            paused: isPaused,
+            paused_until: isPaused ? new Date(state.noSendUntil).toISOString() : null,
+            paused_remaining_ms: isPaused ? state.noSendUntil - now : 0,
             circuit_breaker_open: isCircuitOpen,
             circuit_breaker_closes_at: isCircuitOpen ? new Date(state.circuitOpenUntil).toISOString() : null,
             circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
@@ -884,6 +922,7 @@ exports.get_domain_stats = function (domain) {
         const state = domainState.get(domain);
         const now = Date.now();
         const isCircuitOpen = state.circuitOpenUntil > now;
+        const isPaused = state.noSendUntil > now;
         return {
             delay_ms: state.delay,
             consecutive_successes: state.consecutiveSuccesses,
@@ -893,6 +932,9 @@ exports.get_domain_stats = function (domain) {
             total_deferred: state.totalDeferred,
             total_bounced: state.totalBounced,
             total_rate_limited: state.totalRateLimited,
+            paused: isPaused,
+            paused_until: isPaused ? new Date(state.noSendUntil).toISOString() : null,
+            paused_remaining_ms: isPaused ? state.noSendUntil - now : 0,
             circuit_breaker_open: isCircuitOpen,
             circuit_breaker_closes_at: isCircuitOpen ? new Date(state.circuitOpenUntil).toISOString() : null,
             circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
@@ -923,8 +965,16 @@ exports.close_circuit = function (domain) {
     if (domainState.has(domain)) {
         const state = domainState.get(domain);
         const cfg = getDomainConfig(domain);
+        let changed = false;
         if (state.circuitOpenUntil > 0) {
             state.circuitOpenUntil = 0;
+            changed = true;
+        }
+        if (state.noSendUntil > 0) {
+            state.noSendUntil = 0;
+            changed = true;
+        }
+        if (changed) {
             state.consecutiveRateLimitFailures = 0;
             state.delay = cfg.initialDelay;
             updateMetrics(domain, state);
@@ -968,12 +1018,15 @@ exports.get_problem_domains = function (minFailures = 3) {
     const now = Date.now();
     for (const [domain, state] of domainState.entries()) {
         const isCircuitOpen = state.circuitOpenUntil > now;
-        if (state.consecutiveFailures >= minFailures || isCircuitOpen) {
+        const isPaused = state.noSendUntil > now;
+        if (state.consecutiveFailures >= minFailures || isCircuitOpen || isPaused) {
             problems.push({
                 domain,
                 consecutive_failures: state.consecutiveFailures,
                 consecutive_rate_limit_failures: state.consecutiveRateLimitFailures,
                 delay_ms: state.delay,
+                paused: isPaused,
+                paused_remaining_ms: isPaused ? state.noSendUntil - now : 0,
                 circuit_breaker_open: isCircuitOpen,
                 circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
                 last_error: state.lastError
@@ -981,9 +1034,12 @@ exports.get_problem_domains = function (minFailures = 3) {
         }
     }
     return problems.sort((a, b) => {
-        // Sort by circuit breaker status first, then by failures
+        // Sort by circuit breaker status first, then pause, then by failures
         if (a.circuit_breaker_open !== b.circuit_breaker_open) {
             return a.circuit_breaker_open ? -1 : 1;
+        }
+        if (a.paused !== b.paused) {
+            return a.paused ? -1 : 1;
         }
         return b.consecutive_failures - a.consecutive_failures;
     });

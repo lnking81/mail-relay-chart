@@ -790,7 +790,7 @@ data:
   # === Logging ===
   log.ini: |
     [main]
-    level=debug
+    level={{ .Values.haraka.logLevel | default "info" }}
     timestamps=true
     format=default
 
