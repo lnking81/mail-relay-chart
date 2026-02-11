@@ -777,12 +777,10 @@ exports.on_delivered = function (next, hmail, params) {
         // This prevents race condition with parallel deliveries
         plugin.logdebug(`Adaptive rate: ${mxProvider} delivered while circuit OPEN - ignoring (circuit closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
         // Still count successes, will be used when circuit naturally closes
-    } else if (isPauseActive) {
-        // Immediate pause is active - do NOT clear it
-        plugin.logdebug(`Adaptive rate: ${mxProvider} delivered while PAUSED - ignoring (pause ends at ${new Date(state.noSendUntil).toISOString()})`);
     }
-    // NOTE: Do NOT reset consecutiveRateLimitFailures on single success!
-    // Require multiple successes (threshold) to reset streak - see below
+    // NOTE: Pause (noSendUntil) does NOT block recovery accounting
+    // Pause only throttles outbound send_email, not success counting
+    // Successful deliveries prove Google is accepting, so count them for recovery
 
     // Record metrics
     if (metricsInitialized && metrics.deliveriesCounter) {
@@ -790,9 +788,10 @@ exports.on_delivered = function (next, hmail, params) {
     }
     updateMetrics(mxProvider, state);
 
-    // Reduce delay AND reset streak after threshold consecutive successes
-    // BUT only if no active protection (circuit breaker or pause)
-    if (!isCircuitActive && !isPauseActive && state.consecutiveSuccesses >= cfg.successThreshold) {
+    // Reduce delay AND reduce streak after threshold consecutive successes
+    // Only block recovery if circuit is OPEN (hard stop)
+    // Pause does NOT block - it only throttles send_email
+    if (!isCircuitActive && state.consecutiveSuccesses >= cfg.successThreshold) {
         const oldDelay = state.delay;
         const oldStreak = state.consecutiveRateLimitFailures;
 
@@ -800,9 +799,15 @@ exports.on_delivered = function (next, hmail, params) {
             Math.floor(state.delay * cfg.recoveryRate),
             cfg.minDelay
         );
-        // Reset streak only after proving we can send successfully
+        // Reduce streak gradually, not instant reset
         state.consecutiveRateLimitFailures = Math.max(0, state.consecutiveRateLimitFailures - cfg.successThreshold);
         state.consecutiveSuccesses = 0;
+
+        // Clear pause if we're recovering successfully
+        if (state.noSendUntil > 0) {
+            state.noSendUntil = 0;
+            plugin.loginfo(`Adaptive rate: ${mxProvider} pause cleared after ${cfg.successThreshold} consecutive successes`);
+        }
 
         if (oldDelay !== state.delay || oldStreak !== state.consecutiveRateLimitFailures) {
             plugin.loginfo(`Adaptive rate: ${mxProvider} recovery - delay ${oldDelay}ms -> ${state.delay}ms, streak ${oldStreak} -> ${state.consecutiveRateLimitFailures} (${cfg.successThreshold} consecutive successes)`);
@@ -884,8 +889,13 @@ exports.on_deferred = function (next, hmail, params) {
 
         // CIRCUIT BREAKER: Open or EXTEND circuit on continued rate-limits
         if (state.consecutiveRateLimitFailures >= cfg.circuitBreakerThreshold) {
-            const newCircuitEnd = Date.now() + cfg.circuitBreakerDuration;
-            const wasOpen = state.circuitOpenUntil > Date.now();
+            const now = Date.now();
+            const wasOpen = state.circuitOpenUntil > now;
+            // For extend: use MAX of current circuit end and now + duration
+            // This ensures circuit ALWAYS extends forward, even if Date.now() returns same millisecond
+            const newCircuitEnd = wasOpen
+                ? Math.max(state.circuitOpenUntil, now) + cfg.circuitBreakerDuration
+                : now + cfg.circuitBreakerDuration;
 
             if (!wasOpen) {
                 // First trip - open circuit

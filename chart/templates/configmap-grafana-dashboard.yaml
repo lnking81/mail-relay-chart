@@ -806,7 +806,7 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "increase(haraka_adaptive_rate_rate_limited_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]) > 0",
+            "expr": "sum by (domain) (increase(haraka_adaptive_rate_rate_limited_total{namespace=~\"$namespace\", release=~\"$release\"}[1h])) > 0",
             "format": "table",
             "instant": true,
             "legendFormat": "__auto",
