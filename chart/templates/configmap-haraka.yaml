@@ -827,6 +827,11 @@ data:
     success_threshold={{ .Values.adaptiveRate.defaults.successThreshold }}
     circuit_breaker_threshold={{ .Values.adaptiveRate.defaults.circuitBreakerThreshold }}
     circuit_breaker_duration={{ .Values.adaptiveRate.defaults.circuitBreakerDuration }}
+    {{- if and .Values.persistence.enabled .Values.adaptiveRate.persistence.enabled }}
+    state_file={{ .Values.adaptiveRate.persistence.stateFile }}
+    state_save_interval={{ .Values.adaptiveRate.persistence.saveInterval }}
+    state_max_age={{ .Values.adaptiveRate.persistence.maxAge }}
+    {{- end }}
 
     [domains]
     {{- /* Built-in domains */ -}}

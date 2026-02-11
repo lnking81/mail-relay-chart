@@ -363,6 +363,18 @@ adaptiveRate:
   #     circuitBreakerDuration: 300000
   customDomains: {}
 
+  # State persistence (requires persistence.enabled=true)
+  # Saves state to disk so circuit breakers survive pod restarts
+  persistence:
+    # Enable state persistence
+    enabled: true
+    # File path for state (relative to /data volume)
+    stateFile: /data/adaptive-rate-state.json
+    # How often to save state (ms) - also saves immediately on circuit breaker trip
+    saveInterval: 300000  # 5 minutes
+    # Maximum age of state file to restore (ms) - older files ignored
+    maxAge: 3600000  # 1 hour
+
 # === DKIM Configuration ===
 dkim:
   # Enable DKIM signing

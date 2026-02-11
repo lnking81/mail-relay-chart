@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 // DELAY constant for send_email hook
 // Haraka outbound accepts 'DELAY' string as return code
 const DELAY = 'DELAY';
@@ -91,6 +94,10 @@ const domainState = new Map();
 
 let config = {};
 let plugin_instance = null;
+
+// State persistence
+let stateSaveInterval = null;
+let lastStateSave = 0;
 
 // Prometheus metrics (initialized lazily when prom-client is available)
 let metricsInitialized = false;
@@ -383,6 +390,158 @@ exports.register = function () {
 };
 
 /**
+ * Save state to persistent storage
+ * Called periodically and on significant events (circuit breaker trip)
+ */
+function saveState(plugin) {
+    if (!config.stateFile) return;
+    
+    try {
+        const stateData = {
+            version: 1,
+            savedAt: Date.now(),
+            domains: {}
+        };
+        
+        for (const [domain, state] of domainState.entries()) {
+            // Only save domains with meaningful state
+            if (state.delay > config.initialDelay || 
+                state.consecutiveRateLimitFailures > 0 || 
+                state.circuitOpenUntil > Date.now() ||
+                state.noSendUntil > Date.now()) {
+                stateData.domains[domain] = {
+                    delay: state.delay,
+                    consecutiveSuccesses: state.consecutiveSuccesses,
+                    consecutiveFailures: state.consecutiveFailures,
+                    consecutiveRateLimitFailures: state.consecutiveRateLimitFailures,
+                    totalDelivered: state.totalDelivered,
+                    totalDeferred: state.totalDeferred,
+                    totalBounced: state.totalBounced,
+                    totalRateLimited: state.totalRateLimited,
+                    totalCircuitBreakerTrips: state.totalCircuitBreakerTrips,
+                    circuitOpenUntil: state.circuitOpenUntil,
+                    noSendUntil: state.noSendUntil,
+                    lastUpdate: state.lastUpdate,
+                    lastError: state.lastError
+                };
+            }
+        }
+        
+        // Ensure directory exists
+        const dir = path.dirname(config.stateFile);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        
+        // Write atomically (write to temp, then rename)
+        const tempFile = config.stateFile + '.tmp';
+        fs.writeFileSync(tempFile, JSON.stringify(stateData, null, 2));
+        fs.renameSync(tempFile, config.stateFile);
+        
+        lastStateSave = Date.now();
+        const domainCount = Object.keys(stateData.domains).length;
+        if (domainCount > 0) {
+            plugin.loginfo(`Adaptive rate state saved: ${domainCount} domains to ${config.stateFile}`);
+        }
+    } catch (err) {
+        plugin.logerror(`Adaptive rate state save failed: ${err.message}`);
+    }
+}
+
+/**
+ * Load state from persistent storage
+ * Only loads if state is not older than stateMaxAge
+ */
+function loadState(plugin) {
+    if (!config.stateFile) return;
+    
+    try {
+        if (!fs.existsSync(config.stateFile)) {
+            plugin.loginfo(`Adaptive rate state file not found: ${config.stateFile}`);
+            return;
+        }
+        
+        const content = fs.readFileSync(config.stateFile, 'utf8');
+        const stateData = JSON.parse(content);
+        
+        // Check version
+        if (stateData.version !== 1) {
+            plugin.logwarn(`Adaptive rate state file version mismatch: expected 1, got ${stateData.version}`);
+            return;
+        }
+        
+        // Check age
+        const age = Date.now() - stateData.savedAt;
+        if (age > config.stateMaxAge) {
+            plugin.loginfo(`Adaptive rate state too old: ${Math.round(age / 1000)}s > ${Math.round(config.stateMaxAge / 1000)}s max, ignoring`);
+            return;
+        }
+        
+        // Restore state
+        let restored = 0;
+        const now = Date.now();
+        
+        for (const [domain, saved] of Object.entries(stateData.domains)) {
+            // Skip if circuit/pause already expired
+            const circuitExpired = saved.circuitOpenUntil > 0 && saved.circuitOpenUntil <= now;
+            const pauseExpired = saved.noSendUntil > 0 && saved.noSendUntil <= now;
+            
+            // Only restore if still meaningful
+            if (saved.delay > config.initialDelay || 
+                saved.consecutiveRateLimitFailures > 0 ||
+                (saved.circuitOpenUntil > now) ||
+                (saved.noSendUntil > now)) {
+                
+                const cfg = getDomainConfig(domain);
+                domainState.set(domain, {
+                    delay: saved.delay,
+                    consecutiveSuccesses: saved.consecutiveSuccesses || 0,
+                    consecutiveFailures: saved.consecutiveFailures || 0,
+                    consecutiveRateLimitFailures: saved.consecutiveRateLimitFailures || 0,
+                    totalDelivered: saved.totalDelivered || 0,
+                    totalDeferred: saved.totalDeferred || 0,
+                    totalBounced: saved.totalBounced || 0,
+                    totalRateLimited: saved.totalRateLimited || 0,
+                    totalCircuitBreakerTrips: saved.totalCircuitBreakerTrips || 0,
+                    lastUpdate: saved.lastUpdate || now,
+                    lastSendTime: 0,  // Reset - don't inherit send timing
+                    circuitOpenUntil: circuitExpired ? 0 : (saved.circuitOpenUntil || 0),
+                    noSendUntil: pauseExpired ? 0 : (saved.noSendUntil || 0),
+                    lastError: saved.lastError || null
+                });
+                
+                // Update metrics for restored state
+                updateMetrics(domain, domainState.get(domain));
+                restored++;
+                
+                // Log important restored states
+                const state = domainState.get(domain);
+                if (state.circuitOpenUntil > now) {
+                    const remaining = Math.round((state.circuitOpenUntil - now) / 1000);
+                    plugin.logwarn(`Adaptive rate: restored OPEN circuit for ${domain}, ${remaining}s remaining`);
+                } else if (state.consecutiveRateLimitFailures > 0) {
+                    plugin.loginfo(`Adaptive rate: restored ${domain} - delay=${state.delay}ms, streak=${state.consecutiveRateLimitFailures}`);
+                }
+            }
+        }
+        
+        plugin.loginfo(`Adaptive rate state restored: ${restored} domains from ${config.stateFile} (age: ${Math.round(age / 1000)}s)`);
+        
+    } catch (err) {
+        plugin.logerror(`Adaptive rate state load failed: ${err.message}`);
+    }
+}
+
+/**
+ * Export saveState for manual trigger or circuit breaker events
+ */
+exports.save_state = function () {
+    if (plugin_instance) {
+        saveState(plugin_instance);
+    }
+};
+
+/**
  * Load configuration
  */
 exports.load_config = function () {
@@ -434,6 +593,26 @@ exports.load_config = function () {
                 circuitBreakerDuration: parseInt(domainCfg.circuit_breaker_duration, 10) || config.circuitBreakerDuration
             };
         }
+    }
+
+    // State persistence configuration
+    config.stateFile = cfg.main?.state_file || '';  // Empty = disabled
+    config.stateSaveInterval = parseInt(cfg.main?.state_save_interval, 10) || 300000;  // 5 minutes
+    config.stateMaxAge = parseInt(cfg.main?.state_max_age, 10) || 3600000;  // 1 hour
+
+    // Load persisted state if configured
+    if (config.stateFile) {
+        loadState(plugin);
+        
+        // Set up periodic save
+        if (stateSaveInterval) {
+            clearInterval(stateSaveInterval);
+        }
+        stateSaveInterval = setInterval(() => {
+            saveState(plugin);
+        }, config.stateSaveInterval);
+        
+        plugin.loginfo(`Adaptive rate state persistence enabled: file=${config.stateFile}, interval=${config.stateSaveInterval}ms, maxAge=${config.stateMaxAge}ms`);
     }
 
     plugin.loginfo(`Adaptive rate config loaded: enabled=${config.enabled}, domains=${Object.keys(config.domains).join(',')}`);
@@ -649,7 +828,7 @@ exports.on_send_email = function (next, hmail) {
         return next();
     }
 
-    plugin.logdebug(`on_send_email: recipient=${recipientDomain}, mxProvider=${mxProvider}`);
+    // Debug only - too noisy for info
 
     const state = getState(mxProvider);
     const cfg = getDomainConfig(mxProvider);
@@ -775,7 +954,7 @@ exports.on_delivered = function (next, hmail, params) {
     if (isCircuitActive) {
         // Circuit is open - do NOT close it early, let it expire naturally
         // This prevents race condition with parallel deliveries
-        plugin.logdebug(`Adaptive rate: ${mxProvider} delivered while circuit OPEN - ignoring (circuit closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
+        plugin.loginfo(`Adaptive rate: ${mxProvider} delivered while circuit OPEN - ignoring (circuit closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
         // Still count successes, will be used when circuit naturally closes
     }
     // NOTE: Pause (noSendUntil) does NOT block recovery accounting
@@ -815,7 +994,10 @@ exports.on_delivered = function (next, hmail, params) {
         }
     }
 
-    plugin.logdebug(`Adaptive rate: ${mxProvider} delivered (total: ${state.totalDelivered}, streak: ${state.consecutiveSuccesses}, circuitActive: ${isCircuitActive}, pauseActive: ${isPauseActive})`);
+    // Only log if there's active protection or meaningful streak
+    if (isCircuitActive || isPauseActive || state.consecutiveSuccesses > 0) {
+        plugin.loginfo(`Adaptive rate: ${mxProvider} delivered (total: ${state.totalDelivered}, successStreak: ${state.consecutiveSuccesses}/${cfg.successThreshold})`);
+    }
     next();
 };
 
@@ -850,7 +1032,8 @@ exports.on_deferred = function (next, hmail, params) {
         return next();
     }
 
-    plugin.logdebug(`on_deferred: recipient=${recipientDomain}, mx_host=${mxHost}, mxProvider=${mxProvider}, err=${errMsg.substring(0, 100)}`);
+    // Log all deferred events at info level - they're important for troubleshooting
+    plugin.loginfo(`Adaptive rate: ${mxProvider} deferred - ${errMsg.substring(0, 100)}`);
 
     const state = getState(mxProvider);
     const cfg = getDomainConfig(mxProvider);
@@ -907,6 +1090,9 @@ exports.on_deferred = function (next, hmail, params) {
                 if (metricsInitialized && metrics.circuitBreakerTripsCounter) {
                     try { metrics.circuitBreakerTripsCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
                 }
+                
+                // Save state immediately on circuit breaker trip
+                saveState(plugin);
             } else {
                 // Circuit already open - EXTEND it (rate-limits still coming from in-flight messages)
                 state.circuitOpenUntil = newCircuitEnd;
@@ -966,7 +1152,7 @@ exports.on_bounce = function (next, hmail, err) {
         try { metrics.bouncesCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
     }
 
-    plugin.logdebug(`Adaptive rate: ${mxProvider} bounced (total bounces: ${state.totalBounced})`);
+    plugin.logwarn(`Adaptive rate: ${mxProvider} bounced (total bounces: ${state.totalBounced})`);
     next();
 };
 
