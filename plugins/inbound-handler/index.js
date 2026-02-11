@@ -573,6 +573,7 @@ function send_webhook(plugin, payload) {
     return new Promise((resolve, reject) => {
         // First try dedicated inbound_handler URL
         let webhook_url = config.webhook.url;
+        let webhook_headers = config.webhook.headers;
 
         // If no dedicated URL, try to send via existing webhook endpoints
         if (!webhook_url) {
@@ -587,6 +588,14 @@ function send_webhook(plugin, payload) {
                     const events = (endpoint.events || '').split(',').map(e => e.trim());
                     if (events.includes(payload.event) || events.includes('*')) {
                         webhook_url = endpoint.url;
+                        // Also read headers from this endpoint
+                        webhook_headers = { ...webhook_headers };
+                        for (const key of Object.keys(endpoint)) {
+                            if (key.startsWith('header_')) {
+                                const headerName = key.replace('header_', '').replace(/_/g, '-');
+                                webhook_headers[headerName] = endpoint[key];
+                            }
+                        }
                         break;
                     }
                 }
@@ -595,6 +604,18 @@ function send_webhook(plugin, payload) {
             // Fallback to main.url
             if (!webhook_url && webhookCfg?.main?.url) {
                 webhook_url = webhookCfg.main.url;
+                // Also read headers from main section
+                webhook_headers = { ...webhook_headers };
+                for (const key of Object.keys(webhookCfg.main)) {
+                    if (key.startsWith('header_')) {
+                        const headerName = key.replace('header_', '').replace(/_/g, '-');
+                        webhook_headers[headerName] = webhookCfg.main[key];
+                    }
+                }
+                // Legacy auth_header/auth_token support
+                if (webhookCfg.main.auth_header && webhookCfg.main.auth_token) {
+                    webhook_headers[webhookCfg.main.auth_header] = webhookCfg.main.auth_token;
+                }
             }
         }
 
@@ -615,7 +636,7 @@ function send_webhook(plugin, payload) {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(data),
                 'User-Agent': 'Haraka-Inbound-Handler/1.0',
-                ...config.webhook.headers
+                ...webhook_headers
             },
             timeout: config.webhook.timeout
         };
