@@ -1133,7 +1133,6 @@ blacklist:
     - rbl.schulte.org # SCHULTE
     - backscatter.spameatingmonkey.net # SEM Backscatter
     - bl.spameatingmonkey.net # SEM Black
-    - score.senderscore.com # Sender Score
     - bl.servicesspc.com # SERVICESNET
     - bl.suomispam.net # Suomispam
     - dnsrbl.swinog.ch # SWINOG

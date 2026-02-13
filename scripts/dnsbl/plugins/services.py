@@ -155,10 +155,8 @@ IP_SERVICES: list[DnsblService] = [
     DnsblService(zone="bl.nosolicitado.org"),
     DnsblService(zone="rbl.jp"),
     DnsblService(zone="rbl.schulte.org"),
-    DnsblService(
-        zone="bl.score.senderscore.com",
-        false_positives={"127.255.255.255"},  # Rate limited/blocked
-    ),
+    # NOTE: bl.score.senderscore.com removed - it's a reputation scoring service (0-100),
+    # not a blacklist. Response 127.0.0.X means score=X, not "listed".
     DnsblService(zone="rbl.servicesnet.com"),
     DnsblService(zone="backscatter.spameatingmonkey.net"),
     DnsblService(zone="bl.spameatingmonkey.net"),
