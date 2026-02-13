@@ -870,7 +870,9 @@ def get_current_ip(shared_dir: Path, config: BlacklistConfig) -> Optional[str]:
     if state_file.exists():
         try:
             data: dict[str, str] = json.loads(state_file.read_text())
-            ip: str = data.get("incoming_ip") or data.get("outbound_ip") or ""
+            # Use outbound_ip for blacklist monitoring - this is the IP that
+            # receiving mail servers see and check against DNSBLs
+            ip: str = data.get("outbound_ip") or data.get("incoming_ip") or ""
             if ip:
                 return ip
         except (json.JSONDecodeError, KeyError):
