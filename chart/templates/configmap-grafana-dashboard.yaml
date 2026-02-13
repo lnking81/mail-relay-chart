@@ -1459,6 +1459,10 @@ data:
             }
           ],
           "type": "table"
+        }
+          ],
+          "title": "DMARC Reports",
+          "type": "row"
         },
         {
           "collapsed": false,

@@ -535,6 +535,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
         """Suppress default HTTP logging"""
         pass
 
+    def handle_one_request(self):
+        """Handle a single HTTP request, suppressing connection errors.
+
+        Kubernetes health probes and load balancers may send incomplete
+        requests or disconnect early, causing noisy tracebacks. We catch
+        these expected conditions to keep logs clean.
+        """
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            # Client disconnected - expected for health probes
+            pass
+
     def do_GET(self):
         if self.path == "/metrics":
             self.send_metrics()
