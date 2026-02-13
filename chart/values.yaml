@@ -1047,17 +1047,23 @@ blacklist:
   # from public DNS resolvers (Google 8.8.8.8, Cloudflare 1.1.1.1).
   #
   # Options:
-  # 1. Use freeOnly: true - only check DNSBLs that work with public resolvers
-  # 2. Set dnsServer to your own recursive resolver (unbound, CoreDNS, bind)
-  # 3. Use paid subscription (Spamhaus DQS, URIBL Data Feed)
+  # 1. Use directQuery: true - query authoritative NS directly (recommended)
+  # 2. Use freeOnly: true - only check DNSBLs that work with public resolvers
+  # 3. Set dnsServer to your own recursive resolver (unbound, CoreDNS, bind)
+  # 4. Use paid subscription (Spamhaus DQS, URIBL Data Feed)
 
   # Custom DNS server for premium DNSBL queries
   # Example: "10.96.0.10" (CoreDNS in cluster) or your own unbound
   dnsServer: ""
 
+  # Direct query mode - query authoritative nameservers directly
+  # This bypasses public DNS resolvers and works with premium DNSBLs
+  # like Spamhaus without needing a custom DNS server or subscription
+  directQuery: true
+
   # Only use free DNSBLs that work with public resolvers
   # When true: checks 25 IP lists and 6 domain lists
-  # When false: checks all lists (37 IP + 12 domain) but needs dnsServer for premium
+  # When false: checks all lists (37 IP + 12 domain) but needs directQuery or dnsServer
   freeOnly: false
 
   # === IP Blacklists (DNSBL/RBL) ===

@@ -30,7 +30,7 @@ from typing import Any, Optional
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from dns.registry import get_provider_from_env
+from dns_providers.registry import get_provider_from_env
 from dns_manager import DNSManager, MailConfig
 from utils.ip import IPDetector, IPDetectorConfig
 from utils.k8s import KubernetesClient, KubernetesConfig

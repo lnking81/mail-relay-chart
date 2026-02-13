@@ -1858,7 +1858,8 @@ data:
             },
             "overrides": [
               { "matcher": { "id": "byName", "options": "IP" }, "properties": [{ "id": "custom.width", "value": 140 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] },
-              { "matcher": { "id": "byName", "options": "Blacklist" }, "properties": [{ "id": "custom.width", "value": 220 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] }
+              { "matcher": { "id": "byName", "options": "Blacklist" }, "properties": [{ "id": "custom.width", "value": 180 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] },
+              { "matcher": { "id": "byName", "options": "Reason" }, "properties": [{ "id": "custom.width", "value": 300 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] }
             ]
           },
           "gridPos": { "h": 10, "w": 12, "x": 0, "y": 70 },
@@ -1885,7 +1886,7 @@ data:
               "options": {
                 "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "__name__": true, "container": true, "endpoint": true, "pod": true, "service": true },
                 "indexByName": {},
-                "renameByName": { "ip": "IP", "list": "Blacklist", "Value": "Status" }
+                "renameByName": { "ip": "IP", "list": "Blacklist", "reason": "Reason", "Value": "Status" }
               }
             }
           ],
@@ -1914,7 +1915,8 @@ data:
             },
             "overrides": [
               { "matcher": { "id": "byName", "options": "Domain" }, "properties": [{ "id": "custom.width", "value": 180 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] },
-              { "matcher": { "id": "byName", "options": "Blacklist" }, "properties": [{ "id": "custom.width", "value": 180 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] }
+              { "matcher": { "id": "byName", "options": "Blacklist" }, "properties": [{ "id": "custom.width", "value": 180 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] },
+              { "matcher": { "id": "byName", "options": "Reason" }, "properties": [{ "id": "custom.width", "value": 300 }, { "id": "custom.cellOptions", "value": { "type": "auto" } }] }
             ]
           },
           "gridPos": { "h": 10, "w": 12, "x": 12, "y": 70 },
@@ -1941,7 +1943,7 @@ data:
               "options": {
                 "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "__name__": true, "container": true, "endpoint": true, "pod": true, "service": true },
                 "indexByName": {},
-                "renameByName": { "domain": "Domain", "list": "Blacklist", "Value": "Status" }
+                "renameByName": { "domain": "Domain", "list": "Blacklist", "reason": "Reason", "Value": "Status" }
               }
             }
           ],

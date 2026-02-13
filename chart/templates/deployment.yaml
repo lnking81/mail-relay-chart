@@ -330,6 +330,10 @@ spec:
             - name: BLACKLIST_FREE_ONLY
               value: "true"
             {{- end }}
+            {{- if .Values.blacklist.directQuery }}
+            - name: BLACKLIST_DIRECT_QUERY
+              value: "true"
+            {{- end }}
             # IP blacklists
             - name: BLACKLIST_LISTS
               value: {{ .Values.blacklist.ipLists | join "," | quote }}

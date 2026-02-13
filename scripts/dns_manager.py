@@ -26,8 +26,8 @@ from typing import Any, Optional
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from dns.base import DNSProvider, DNSRecord, RecordType
-from dns.registry import get_provider_from_env
+from dns_providers.base import DNSProvider, DNSRecord, RecordType
+from dns_providers.registry import get_provider_from_env
 from utils.ip import IPDetector, IPDetectorConfig
 from utils.k8s import KubernetesClient, KubernetesConfig
 
@@ -143,13 +143,16 @@ class DNSManager:
             provider_name = self.ptr_config.provider.lower()
 
             if provider_name == "hetzner" or provider_name == "hetzner-cloud":
-                from dns.hetzner import HetznerConfig, HetznerProvider
+                from dns_providers.hetzner import HetznerConfig, HetznerProvider
 
                 hz_config = HetznerConfig.from_env(self.provider.owner_id)
                 self._ptr_provider = HetznerProvider(hz_config)
 
             elif provider_name == "hetzner-robot":
-                from dns.hetzner import HetznerRobotConfig, HetznerRobotProvider
+                from dns_providers.hetzner import (
+                    HetznerRobotConfig,
+                    HetznerRobotProvider,
+                )
 
                 robot_config = HetznerRobotConfig.from_env(self.provider.owner_id)
                 self._ptr_provider = HetznerRobotProvider(robot_config)
