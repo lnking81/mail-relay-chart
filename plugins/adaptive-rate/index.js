@@ -395,18 +395,18 @@ exports.register = function () {
  */
 function saveState(plugin) {
     if (!config.stateFile) return;
-    
+
     try {
         const stateData = {
             version: 1,
             savedAt: Date.now(),
             domains: {}
         };
-        
+
         for (const [domain, state] of domainState.entries()) {
             // Only save domains with meaningful state
-            if (state.delay > config.initialDelay || 
-                state.consecutiveRateLimitFailures > 0 || 
+            if (state.delay > config.initialDelay ||
+                state.consecutiveRateLimitFailures > 0 ||
                 state.circuitOpenUntil > Date.now() ||
                 state.noSendUntil > Date.now()) {
                 stateData.domains[domain] = {
@@ -426,18 +426,18 @@ function saveState(plugin) {
                 };
             }
         }
-        
+
         // Ensure directory exists
         const dir = path.dirname(config.stateFile);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        
+
         // Write atomically (write to temp, then rename)
         const tempFile = config.stateFile + '.tmp';
         fs.writeFileSync(tempFile, JSON.stringify(stateData, null, 2));
         fs.renameSync(tempFile, config.stateFile);
-        
+
         lastStateSave = Date.now();
         const domainCount = Object.keys(stateData.domains).length;
         if (domainCount > 0) {
@@ -454,44 +454,44 @@ function saveState(plugin) {
  */
 function loadState(plugin) {
     if (!config.stateFile) return;
-    
+
     try {
         if (!fs.existsSync(config.stateFile)) {
             plugin.loginfo(`Adaptive rate state file not found: ${config.stateFile}`);
             return;
         }
-        
+
         const content = fs.readFileSync(config.stateFile, 'utf8');
         const stateData = JSON.parse(content);
-        
+
         // Check version
         if (stateData.version !== 1) {
             plugin.logwarn(`Adaptive rate state file version mismatch: expected 1, got ${stateData.version}`);
             return;
         }
-        
+
         // Check age
         const age = Date.now() - stateData.savedAt;
         if (age > config.stateMaxAge) {
             plugin.loginfo(`Adaptive rate state too old: ${Math.round(age / 1000)}s > ${Math.round(config.stateMaxAge / 1000)}s max, ignoring`);
             return;
         }
-        
+
         // Restore state
         let restored = 0;
         const now = Date.now();
-        
+
         for (const [domain, saved] of Object.entries(stateData.domains)) {
             // Skip if circuit/pause already expired
             const circuitExpired = saved.circuitOpenUntil > 0 && saved.circuitOpenUntil <= now;
             const pauseExpired = saved.noSendUntil > 0 && saved.noSendUntil <= now;
-            
+
             // Only restore if still meaningful
-            if (saved.delay > config.initialDelay || 
+            if (saved.delay > config.initialDelay ||
                 saved.consecutiveRateLimitFailures > 0 ||
                 (saved.circuitOpenUntil > now) ||
                 (saved.noSendUntil > now)) {
-                
+
                 const cfg = getDomainConfig(domain);
                 domainState.set(domain, {
                     delay: saved.delay,
@@ -509,11 +509,11 @@ function loadState(plugin) {
                     noSendUntil: pauseExpired ? 0 : (saved.noSendUntil || 0),
                     lastError: saved.lastError || null
                 });
-                
+
                 // Update metrics for restored state
                 updateMetrics(domain, domainState.get(domain));
                 restored++;
-                
+
                 // Log important restored states
                 const state = domainState.get(domain);
                 if (state.circuitOpenUntil > now) {
@@ -524,9 +524,9 @@ function loadState(plugin) {
                 }
             }
         }
-        
+
         plugin.loginfo(`Adaptive rate state restored: ${restored} domains from ${config.stateFile} (age: ${Math.round(age / 1000)}s)`);
-        
+
     } catch (err) {
         plugin.logerror(`Adaptive rate state load failed: ${err.message}`);
     }
@@ -603,7 +603,7 @@ exports.load_config = function () {
     // Load persisted state if configured
     if (config.stateFile) {
         loadState(plugin);
-        
+
         // Set up periodic save
         if (stateSaveInterval) {
             clearInterval(stateSaveInterval);
@@ -611,7 +611,7 @@ exports.load_config = function () {
         stateSaveInterval = setInterval(() => {
             saveState(plugin);
         }, config.stateSaveInterval);
-        
+
         plugin.loginfo(`Adaptive rate state persistence enabled: file=${config.stateFile}, interval=${config.stateSaveInterval}ms, maxAge=${config.stateMaxAge}ms`);
     }
 
@@ -1090,7 +1090,7 @@ exports.on_deferred = function (next, hmail, params) {
                 if (metricsInitialized && metrics.circuitBreakerTripsCounter) {
                     try { metrics.circuitBreakerTripsCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
                 }
-                
+
                 // Save state immediately on circuit breaker trip
                 saveState(plugin);
             } else {

@@ -371,9 +371,9 @@ adaptiveRate:
     # File path for state (relative to /data volume)
     stateFile: /data/adaptive-rate-state.json
     # How often to save state (ms) - also saves immediately on circuit breaker trip
-    saveInterval: 300000  # 5 minutes
+    saveInterval: 300000 # 5 minutes
     # Maximum age of state file to restore (ms) - older files ignored
-    maxAge: 3600000  # 1 hour
+    maxAge: 3600000 # 1 hour
 
 # === DKIM Configuration ===
 dkim:
@@ -970,6 +970,199 @@ webhooks:
   timeout: 5000
   retry: true
   maxRetries: 3
+
+# === Blacklist Monitoring ===
+# Monitors mail relay IP and domains against DNS-based blacklists
+# Sends alerts via email, webhooks, and exposes Prometheus metrics
+blacklist:
+  # Enable blacklist monitoring sidecar
+  enabled: true
+
+  # Check interval in seconds (default: 1 hour)
+  # Lower values increase DNS queries but catch listings faster
+  interval: 3600
+
+  # Prometheus metrics port
+  metricsPort: 8095
+
+  # === DNS Configuration ===
+  # Many premium DNSBLs (Spamhaus, URIBL, SURBL, SenderScore) block queries
+  # from public DNS resolvers (Google 8.8.8.8, Cloudflare 1.1.1.1).
+  #
+  # Options:
+  # 1. Use freeOnly: true - only check DNSBLs that work with public resolvers
+  # 2. Set dnsServer to your own recursive resolver (unbound, CoreDNS, bind)
+  # 3. Use paid subscription (Spamhaus DQS, URIBL Data Feed)
+
+  # Custom DNS server for premium DNSBL queries
+  # Example: "10.96.0.10" (CoreDNS in cluster) or your own unbound
+  dnsServer: ""
+
+  # Only use free DNSBLs that work with public resolvers
+  # When true: checks 25 IP lists and 6 domain lists
+  # When false: checks all lists (37 IP + 12 domain) but needs dnsServer for premium
+  freeOnly: false
+
+  # === IP Blacklists (DNSBL/RBL) ===
+  # Full list matching MXToolbox coverage (60+ lists)
+  # Uses reverse-IP lookup: 4.3.2.1.dnsbl.example.org
+  ipLists:
+    # Critical - most widely used
+    - zen.spamhaus.org # Spamhaus ZEN (SBL+XBL+PBL)
+    - b.barracudacentral.org # Barracuda Central
+    - bl.spamcop.net # SpamCop
+
+    # Major providers
+    - dnsbl.sorbs.net # SORBS aggregate
+    - dnsbl-1.uceprotect.net # UCEProtect Level 1
+    - dnsbl-2.uceprotect.net # UCEProtect Level 2
+    - dnsbl-3.uceprotect.net # UCEProtect Level 3
+    - psbl.surriel.com # Passive Spam Block List
+
+    # SpamRATS
+    - dyna.spamrats.com # SpamRATS Dynamic
+    - noptr.spamrats.com # SpamRATS No PTR
+    - spam.spamrats.com # SpamRATS Spam
+
+    # Mailspike
+    - bl.mailspike.net # Mailspike BL
+    - z.mailspike.net # Mailspike Z
+
+    # 0SPAM
+    - bl.0spam.org # 0SPAM RBL
+
+    # Abusix Mail Intelligence
+    - combined.mail.abusix.zone # Abusix Combined
+    - dblack.mail.abusix.zone # Abusix Domain Blacklist
+    - exploit.mail.abusix.zone # Abusix Exploit list
+
+    # Various providers
+    - anonmails.de # Anonmails DNSBL
+    - ips.backscatterer.org # Backscatterer
+    - bl.blocklist.de # Blocklist.de
+    - bogons.cymru.com # CYMRU Bogons
+    - torexit.dan.me.uk # DAN TOR Exit
+    - tor.dan.me.uk # DAN TOR
+    - rbl.dns-servicios.com # DRMX
+    - drone.abuse.ch # Drone BL
+    - bl.fabel.dk # Fabelsources
+    - hil.habeas.com # HIL
+    - hil2.habeas.com # HIL2
+    - hostkarma.junkemailfilter.com # Hostkarma Black
+    - dnsbl.ibm.com # IBM DNS Blacklist
+    - icm.your-server.de # ICMFORBIDDEN
+    - spamlist.or.kr # IMP SPAM
+    - wormlist.or.kr # IMP WORM
+    - rbl.interserver.net # Interserver
+    - dnsbl.inps.de # ivmSIP
+    - dnsbl24.inps.de # ivmSIP24
+    - mail-abuse.blacklist.jippg.org # JIPPG
+    - rbl.kempt.net # KEMPTBL
+    - bl.konstant.no # Konstant
+    - rbl.lashback.com # Lashback
+    - phishing.rbl.msrbl.net # MSRBL Phishing
+    - spam.rbl.msrbl.net # MSRBL Spam
+    - relays.nether.net # NETHERRELAYS
+    - unsure.nether.net # NETHERUNSURE
+    - bl.nordspam.com # Nordspam BL
+    - bl.nosolicitado.org # NoSolicitado
+    - all.s5h.net # s5h.net
+    - rbl.schulte.org # SCHULTE
+    - backscatter.spameatingmonkey.net # SEM Backscatter
+    - bl.spameatingmonkey.net # SEM Black
+    - score.senderscore.com # Sender Score
+    - bl.servicesspc.com # SERVICESNET
+    - bl.suomispam.net # Suomispam
+    - dnsrbl.swinog.ch # SWINOG
+    - mail-abuse.rbl.triumf.ca # TRIUMF
+    - truncate.gbudb.net # TRUNCATE
+    - dnsbl.zapbl.net # ZapBL
+    - db.wpbl.info # Woodys SMTP Blacklist
+
+  # Additional custom IP blacklists
+  customIpLists: []
+
+  # === Domain Blacklists (URIBL/DBL) ===
+  # Checks sending domains against URI/domain blacklists
+  # Uses direct lookup: example.com.dbl.spamhaus.org
+  domainLists:
+    - dbl.spamhaus.org # Spamhaus Domain Block List (most important)
+    - multi.surbl.org # SURBL Multi
+    - multi.uribl.com # URIBL Multi
+    - black.uribl.com # URIBL Black
+    - grey.uribl.com # URIBL Grey
+    - rhsbl.sorbs.net # SORBS RHSBL
+    - dbl.nordspam.com # Nordspam DBL
+    - dbl.suomispam.net # Suomispam DBL
+    - rhsbl.zapbl.net # ZapBL RHSBL
+    - dbl.abuseat.org # Abuseat DBL
+    - fresh.spameatingmonkey.net # SEM Fresh Domains
+    - fresh15.spameatingmonkey.net # SEM Fresh 15-day
+
+  # Additional custom domain blacklists
+  customDomainLists: []
+
+  # Domains to check (in addition to mail.domains which are auto-added)
+  # Leave empty to only check domains from mail.domains
+  additionalDomains: []
+
+  # Email alerts when IP/domain is found on blacklist
+  alerts:
+    # Enable email notifications
+    enabled: false
+
+    # Recipients for blacklist alerts
+    recipients: []
+    # Example:
+    # recipients:
+    #   - admin@example.com
+    #   - ops-team@example.com
+
+    # Sender address for alerts (should be in mail.domains)
+    # Default: blacklist-monitor@{first domain}
+    from: ""
+
+    # Subject line prefix
+    subjectPrefix: "[BLACKLIST ALERT]"
+
+    # Cooldown between alerts for same IP/domain/blacklist (hours)
+    # Prevents alert spam when target stays listed
+    cooldownHours: 24
+
+    # SMTP settings for sending alerts
+    # Default: use localhost (the mail relay itself)
+    smtp:
+      host: "localhost"
+      port: 25
+
+  # Webhook notifications
+  webhook:
+    # Enable webhook notifications
+    enabled: false
+
+    # Webhook URL (receives POST with JSON payload)
+    url: ""
+    # Example:
+    # url: "https://hooks.slack.com/services/xxx"
+    # url: "https://api.pagerduty.com/events"
+
+    # Request timeout in seconds
+    timeout: 5
+
+    # Custom headers (e.g., for authentication)
+    headers: {}
+    # Example:
+    # headers:
+    #   Authorization: "Bearer token123"
+
+  # Resource limits for blacklist sidecar
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi
 
 # === Extra Sidecars ===
 # Add custom sidecar containers to the pod

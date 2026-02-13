@@ -13,6 +13,7 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
 | **Inbound**         | VERP bounce processing, FBL (Feedback Loop) handling, HMAC-protected addresses                            |
 | **DMARC Analytics** | Aggregate report parsing, deliverability metrics, spoofing detection, policy tuning                       |
 | **Webhooks**        | Delivery events (delivered, bounced, deferred, complaint) to multiple endpoints                           |
+| **Blacklist**       | DNSBL/RBL monitoring, email/webhook alerts, Prometheus metrics, auto IP detection                         |
 | **Monitoring**      | Prometheus metrics, Grafana dashboards, real-time Watch dashboard                                         |
 | **Infrastructure**  | Kubernetes-native, non-root container, Network Policies, PVC for queue                                    |
 
@@ -36,6 +37,7 @@ Production-ready Helm chart for deploying a high-performance SMTP mail relay on 
   - [Inbound Mail (Bounces/FBL)](#inbound-mail-bouncesfbl)
   - [DMARC Aggregate Reports](#dmarc-aggregate-reports)
   - [Webhooks](#webhooks)
+  - [Blacklist Monitoring](#blacklist-monitoring)
   - [Monitoring](#monitoring)
 - [Security](#security)
 - [Operations](#operations)
@@ -104,12 +106,16 @@ services:
 │  │  │  Plugins:   │  │ - Monitor   │  └─────────────────┘   │  │
 │  │  │  - DKIM     │  │   IP changes│                        │  │
 │  │  │  - Relay    │  │ - Update    │  ┌─────────────────┐   │  │
-│  │  │  - Webhook  │  │   DNS       │  │   Volumes       │   │  │
-│  │  │  - Limit    │  └─────────────┘  │ - Config        │   │  │
-│  │  │  - ...      │                   │ - DKIM Keys     │   │  │
-│  │  └──────┬──────┘                   │ - Queue (PVC)   │   │  │
-│  │         │                          └─────────────────┘   │  │
-│  └─────────┼────────────────────────────────────────────────┘  │
+│  │  │  - Webhook  │  │   DNS       │  │ Blacklist       │   │  │
+│  │  │  - Limit    │  └─────────────┘  │ Monitor         │   │  │
+│  │  │  - ...      │                   │ (Sidecar)       │   │  │
+│  │  └──────┬──────┘  ┌─────────────┐  │ - DNSBL checks  │   │  │
+│  │         │         │   Volumes   │  │ - Alerts        │   │  │
+│  │         │         │ - Config    │  └─────────────────┘   │  │
+│  │         │         │ - DKIM Keys │                        │  │
+│  │         │         │ - Queue     │                        │  │
+│  │         │         │ - Shared    │                        │  │
+│  └─────────┼─────────┴─────────────┴────────────────────────┘  │
 │            │                                                     │
 │  ┌─────────▼─────────┐    ┌────────────────────┐               │
 │  │  Service (LB/NP)  │    │  Secrets           │               │
@@ -127,13 +133,14 @@ services:
 
 ### Components
 
-| Component          | Description                                              |
-| ------------------ | -------------------------------------------------------- |
-| **Haraka**         | High-performance Node.js SMTP server                     |
-| **DKIM Init**      | Generates RSA keys per domain, stores in K8s Secrets     |
-| **DNS Init**       | Creates DNS records, waits for propagation               |
-| **DNS Watcher**    | Monitors IP changes, updates DNS automatically           |
-| **Custom Plugins** | Webhooks, adaptive rate, sender validation, VERP bounces |
+| Component             | Description                                              |
+| --------------------- | -------------------------------------------------------- |
+| **Haraka**            | High-performance Node.js SMTP server                     |
+| **DKIM Init**         | Generates RSA keys per domain, stores in K8s Secrets     |
+| **DNS Init**          | Creates DNS records, waits for propagation               |
+| **DNS Watcher**       | Monitors IP changes, updates DNS automatically           |
+| **Blacklist Monitor** | Checks IP against DNSBLs, sends alerts                   |
+| **Custom Plugins**    | Webhooks, adaptive rate, sender validation, VERP bounces |
 
 ---
 
@@ -747,6 +754,161 @@ webhooks:
   "delay": 1234
 }
 ```
+
+### Blacklist Monitoring
+
+Monitor your mail relay IP against DNS-based blacklists (DNSBL/RBL). Getting listed on a blacklist can severely impact email deliverability.
+
+#### Why You Need This
+
+| Problem             | Impact                                              |
+| ------------------- | --------------------------------------------------- |
+| **IP on Spamhaus**  | Gmail, Outlook reject all your emails               |
+| **IP on Barracuda** | Corporate emails blocked by firewall                |
+| **No monitoring**   | You discover issues days later from user complaints |
+
+#### Configuration
+
+```yaml
+blacklist:
+  enabled: true
+
+  # Check interval (default: 1 hour)
+  interval: 3600
+
+  # Prometheus metrics port
+  metricsPort: 8095
+
+  # Popular DNSBLs (all checked by default)
+  lists:
+    - zen.spamhaus.org # Most important
+    - b.barracudacentral.org
+    - bl.spamcop.net
+    - dnsbl.sorbs.net
+    - dnsbl-1.uceprotect.net
+    - psbl.surriel.com
+    - dyna.spamrats.com
+    - bl.mailspike.net
+
+  # Add custom blacklists
+  customLists:
+    - rbl.example.com
+
+  # Email alerts
+  alerts:
+    enabled: true
+    recipients:
+      - admin@example.com
+      - ops-team@example.com
+    from: "blacklist-monitor@example.com"
+    subjectPrefix: "[BLACKLIST ALERT]"
+    cooldownHours: 24 # Prevent alert spam
+
+  # Webhook notifications
+  webhook:
+    enabled: true
+    url: "https://hooks.slack.com/services/xxx"
+    timeout: 5
+    headers:
+      Authorization: "Bearer token"
+
+  # Resource limits
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi
+```
+
+#### Prometheus Metrics
+
+Available at `http://pod-ip:8095/metrics`:
+
+```promql
+# Current blacklist status (1 = listed, 0 = clean)
+mail_relay_blacklist_status{ip="203.0.113.1",list="zen.spamhaus.org"} 0
+
+# Total checks performed
+mail_relay_blacklist_checks_total 42
+
+# Listing events (counter)
+mail_relay_blacklist_listed_total{ip="203.0.113.1",list="bl.spamcop.net"} 1
+
+# Last check timestamp
+mail_relay_blacklist_last_check_timestamp 1705312200
+```
+
+#### Alertmanager Rules
+
+```yaml
+groups:
+  - name: blacklist
+    rules:
+      - alert: IPBlacklisted
+        expr: mail_relay_blacklist_status == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mail IP {{ $labels.ip }} is on {{ $labels.list }}"
+          description: "Submit delisting request immediately"
+          runbook: "https://mxtoolbox.com/blacklists.aspx"
+
+      - alert: BlacklistCheckFailed
+        expr: time() - mail_relay_blacklist_last_check_timestamp > 7200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Blacklist check not running for 2+ hours"
+```
+
+#### Email Alert Example
+
+When your IP is found on a blacklist, you receive:
+
+```
+Subject: [BLACKLIST ALERT] IP found on 1 blacklist(s)
+
+The following IP addresses have been found on blacklists:
+
+  IP: 203.0.113.1
+  Blacklist: bl.spamcop.net
+  Return Code: 127.0.0.2
+  Reason: Listed due to spam complaints
+
+Action Required:
+  1. Check https://mxtoolbox.com/blacklists.aspx for delisting procedures
+  2. Review mail server logs for potential abuse
+  3. Submit delisting requests to the RBL operators
+```
+
+#### Webhook Payload
+
+```json
+{
+  "event": "blacklist_alert",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "listings": [
+    {
+      "ip": "203.0.113.1",
+      "blacklist": "bl.spamcop.net",
+      "return_code": "127.0.0.2",
+      "reason": "Listed due to spam complaints"
+    }
+  ]
+}
+```
+
+#### How It Works
+
+1. **IP Detection**: Reads IP from DNS watcher shared volume, or auto-detects via external API
+2. **DNSBL Lookup**: Checks `reversed-ip.blacklist.domain` DNS A record
+3. **Result Parsing**: 127.0.0.x response = listed, NXDOMAIN = clean
+4. **Alerting**: Email via local relay, webhook to external systems
+5. **Metrics**: Prometheus gauges and counters for dashboards
 
 ### Monitoring
 

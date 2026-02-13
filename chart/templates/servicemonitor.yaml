@@ -43,6 +43,21 @@ spec:
           targetLabel: release
           replacement: {{ .Release.Name | quote }}
     {{- end }}
+    {{- if .Values.blacklist.enabled }}
+    - port: bl-metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      path: /metrics
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+      metricRelabelings:
+        - sourceLabels: []
+          targetLabel: hostname
+          replacement: {{ .Values.mail.hostname | quote }}
+        - sourceLabels: []
+          targetLabel: release
+          replacement: {{ .Release.Name | quote }}
+    {{- end }}
   namespaceSelector:
     matchNames:
       - {{ .Release.Namespace }}

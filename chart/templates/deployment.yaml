@@ -244,7 +244,7 @@ spec:
               mountPath: /app/config/dkim
               readOnly: true
             {{- end }}
-            {{- if .Values.dns.enabled }}
+            {{- if or .Values.dns.enabled .Values.blacklist.enabled }}
             - name: shared
               mountPath: /shared
               readOnly: true
@@ -296,6 +296,116 @@ spec:
             readOnlyRootFilesystem: true
         {{- end }}
 
+        {{- if .Values.blacklist.enabled }}
+        # Blacklist Monitor Sidecar - monitors IP and domains against DNSBLs
+        - name: blacklist-monitor
+          image: {{ include "mail-relay.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "/app/blacklist_monitor.py"]
+          args:
+            - --interval={{ .Values.blacklist.interval }}
+            - --metrics-port={{ .Values.blacklist.metricsPort }}
+            - --shared-dir=/shared
+            {{- if .Values.blacklist.dnsServer }}
+            - --dns-server={{ .Values.blacklist.dnsServer }}
+            {{- end }}
+            {{- if .Values.blacklist.freeOnly }}
+            - --free-only
+            {{- end }}
+          ports:
+            - name: bl-metrics
+              containerPort: {{ .Values.blacklist.metricsPort }}
+              protocol: TCP
+          env:
+            - name: BLACKLIST_INTERVAL
+              value: {{ .Values.blacklist.interval | quote }}
+            - name: BLACKLIST_METRICS_PORT
+              value: {{ .Values.blacklist.metricsPort | quote }}
+            # DNS configuration for premium DNSBLs
+            {{- if .Values.blacklist.dnsServer }}
+            - name: BLACKLIST_DNS_SERVER
+              value: {{ .Values.blacklist.dnsServer | quote }}
+            {{- end }}
+            {{- if .Values.blacklist.freeOnly }}
+            - name: BLACKLIST_FREE_ONLY
+              value: "true"
+            {{- end }}
+            # IP blacklists
+            - name: BLACKLIST_LISTS
+              value: {{ .Values.blacklist.ipLists | join "," | quote }}
+            {{- if .Values.blacklist.customIpLists }}
+            - name: BLACKLIST_CUSTOM_LISTS
+              value: {{ .Values.blacklist.customIpLists | join "," | quote }}
+            {{- end }}
+            # Domain blacklists
+            - name: BLACKLIST_DOMAIN_LISTS
+              value: {{ .Values.blacklist.domainLists | join "," | quote }}
+            {{- if .Values.blacklist.customDomainLists }}
+            - name: BLACKLIST_CUSTOM_DOMAIN_LISTS
+              value: {{ .Values.blacklist.customDomainLists | join "," | quote }}
+            {{- end }}
+            # Domains to check (mail.domains + additionalDomains)
+            {{- $domains := list }}
+            {{- range .Values.mail.domains }}
+            {{- $domains = append $domains .name }}
+            {{- end }}
+            {{- if .Values.blacklist.additionalDomains }}
+            {{- $domains = concat $domains .Values.blacklist.additionalDomains }}
+            {{- end }}
+            - name: BLACKLIST_DOMAINS
+              value: {{ $domains | join "," | quote }}
+            {{- if .Values.blacklist.alerts.enabled }}
+            - name: BLACKLIST_ALERT_ENABLED
+              value: "true"
+            - name: BLACKLIST_ALERT_RECIPIENTS
+              value: {{ .Values.blacklist.alerts.recipients | join "," | quote }}
+            - name: BLACKLIST_ALERT_FROM
+              value: {{ .Values.blacklist.alerts.from | default (printf "blacklist-monitor@%s" (first .Values.mail.domains).name) | quote }}
+            - name: BLACKLIST_ALERT_SUBJECT_PREFIX
+              value: {{ .Values.blacklist.alerts.subjectPrefix | quote }}
+            - name: BLACKLIST_ALERT_COOLDOWN_HOURS
+              value: {{ .Values.blacklist.alerts.cooldownHours | quote }}
+            - name: BLACKLIST_ALERT_SMTP_HOST
+              value: {{ .Values.blacklist.alerts.smtp.host | quote }}
+            - name: BLACKLIST_ALERT_SMTP_PORT
+              value: {{ .Values.blacklist.alerts.smtp.port | quote }}
+            {{- end }}
+            {{- if .Values.blacklist.webhook.enabled }}
+            - name: BLACKLIST_WEBHOOK_ENABLED
+              value: "true"
+            - name: BLACKLIST_WEBHOOK_URL
+              value: {{ .Values.blacklist.webhook.url | quote }}
+            - name: BLACKLIST_WEBHOOK_TIMEOUT
+              value: {{ .Values.blacklist.webhook.timeout | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: bl-metrics
+            initialDelaySeconds: 10
+            periodSeconds: 60
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: bl-metrics
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.blacklist.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        {{- end }}
+
         {{- with .Values.sidecars }}
         # Custom sidecars
         {{- toYaml . | nindent 8 }}
@@ -311,7 +421,7 @@ spec:
             defaultMode: 0755
         - name: config-workdir
           emptyDir: {}
-        {{- if .Values.dns.enabled }}
+        {{- if or .Values.dns.enabled .Values.blacklist.enabled }}
         - name: shared
           emptyDir: {}
         {{- end }}

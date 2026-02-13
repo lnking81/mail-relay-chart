@@ -67,6 +67,12 @@ spec:
       protocol: TCP
       name: rate-metrics
     {{- end }}
+    {{- if and $.Values.blacklist.enabled (eq $index 0) }}
+    - port: {{ $.Values.blacklist.metricsPort }}
+      targetPort: bl-metrics
+      protocol: TCP
+      name: bl-metrics
+    {{- end }}
   selector:
     {{- include "mail-relay.selectorLabels" $ | nindent 4 }}
 {{- end }}
