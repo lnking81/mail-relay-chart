@@ -918,7 +918,7 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
           "id": 44,
           "options": {
-            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true, "sortBy": "Max", "sortDesc": true },
             "tooltip": { "mode": "multi", "sort": "desc" }
           },
           "targets": [{
@@ -967,7 +967,7 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
           "id": 45,
           "options": {
-            "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "legend": { "calcs": ["sum", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true, "sortBy": "Total", "sortDesc": true },
             "tooltip": { "mode": "multi", "sort": "desc" }
           },
           "targets": [
@@ -994,8 +994,137 @@ data:
           "type": "timeseries"
         },
         {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Delay statistics per domain with search/filter",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "auto" },
+                "filterable": true,
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 5000 },
+                { "color": "red", "value": 30000 }
+              ]},
+              "unit": "ms"
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Domain" }, "properties": [{ "id": "custom.width", "value": 220 }, { "id": "unit", "value": "string" }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+          "id": 97,
+          "options": {
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Current" }]
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "max by (domain) (haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"})",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
+            "refId": "A"
+          }],
+          "title": "Delay by Domain",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true },
+                "indexByName": {},
+                "renameByName": { "domain": "Domain", "Value": "Current" }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Delivery statistics per domain with search/filter",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "custom": {
+                "align": "auto",
+                "cellOptions": { "type": "auto" },
+                "filterable": true,
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Domain" }, "properties": [{ "id": "custom.width", "value": 180 }] },
+              { "matcher": { "id": "byName", "options": "Delivered" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "Deferred" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "Bounced" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+          "id": 98,
+          "options": {
+            "cellHeight": "sm",
+            "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": true },
+            "showHeader": true,
+            "sortBy": [{ "desc": true, "displayName": "Delivered" }]
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (domain) (increase(haraka_adaptive_rate_deliveries_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "__auto",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (domain) (increase(haraka_adaptive_rate_deferrals_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "__auto",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (domain) (increase(haraka_adaptive_rate_bounces_total{namespace=~\"$namespace\", release=~\"$release\"}[$__range]))",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "__auto",
+              "refId": "C"
+            }
+          ],
+          "title": "Delivery Stats by Domain",
+          "transformations": [
+            {
+              "id": "joinByField",
+              "options": { "byField": "domain", "mode": "outer" }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "Time 1": true, "Time 2": true, "Time 3": true },
+                "indexByName": {},
+                "renameByName": { "domain": "Domain", "Value #A": "Delivered", "Value #B": "Deferred", "Value #C": "Bounced" }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
           "collapsed": true,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
           "id": 50,
           "panels": [
         {
