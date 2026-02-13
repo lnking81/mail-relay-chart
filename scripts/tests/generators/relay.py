@@ -30,7 +30,7 @@ class OpenRelayProtectionTests(TestGenerator):
         return True  # Always applicable - critical security tests
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         primary_domain = config.mail.primary_domain
         allowed_sender = config.get_allowed_sender()
 

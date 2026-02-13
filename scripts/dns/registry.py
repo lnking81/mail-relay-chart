@@ -6,7 +6,7 @@ Factory for creating DNS provider instances based on configuration.
 
 import logging
 import os
-from typing import Optional, Type
+from typing import Any, Optional, Type
 
 from .base import DNSProvider, DNSProviderConfig
 
@@ -25,7 +25,7 @@ def register_provider(name: str, provider_class: Type[DNSProvider]) -> None:
 def get_provider(
     provider_name: str,
     owner_id: str,
-    **kwargs,
+    **kwargs: Any,
 ) -> Optional[DNSProvider]:
     """
     Get a configured DNS provider instance.
@@ -51,18 +51,30 @@ def get_provider(
     if provider_name == "cloudflare":
         from .cloudflare import CloudflareConfig
 
-        config = CloudflareConfig.from_env(owner_id)
+        cf_config = CloudflareConfig.from_env(owner_id)
 
         # Override with kwargs
         for key, value in kwargs.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
+            if hasattr(cf_config, key):
+                setattr(cf_config, key, value)
 
-        return provider_class(config)
+        return provider_class(cf_config)
+
+    if provider_name == "hetzner":
+        from .hetzner import HetznerConfig
+
+        hz_config = HetznerConfig.from_env(owner_id)
+
+        # Override with kwargs
+        for key, value in kwargs.items():
+            if hasattr(hz_config, key):
+                setattr(hz_config, key, value)
+
+        return provider_class(hz_config)
 
     # Generic provider
-    config = DNSProviderConfig(owner_id=owner_id, **kwargs)
-    return provider_class(config)
+    generic_config = DNSProviderConfig(owner_id=owner_id, **kwargs)
+    return provider_class(generic_config)
 
 
 def get_provider_from_env() -> Optional[DNSProvider]:
@@ -96,7 +108,7 @@ def get_provider_from_env() -> Optional[DNSProvider]:
 
 
 # Auto-register built-in providers
-def _register_builtin_providers():
+def _register_builtin_providers() -> None:
     """Register all built-in providers"""
     try:
         from .cloudflare import CloudflareProvider
@@ -104,6 +116,13 @@ def _register_builtin_providers():
         register_provider("cloudflare", CloudflareProvider)
     except ImportError as e:
         logger.warning(f"Could not load Cloudflare provider: {e}")
+
+    try:
+        from .hetzner import HetznerProvider
+
+        register_provider("hetzner", HetznerProvider)
+    except ImportError as e:
+        logger.warning(f"Could not load Hetzner provider: {e}")
 
 
 _register_builtin_providers()

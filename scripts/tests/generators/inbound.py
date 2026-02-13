@@ -26,7 +26,7 @@ class InboundBounceTests(TestGenerator):
         return config.inbound.enabled
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         primary_domain = config.mail.primary_domain
         bounce_prefix = config.inbound.bounce.prefix_without_plus
         require_hmac = config.inbound.bounce.require_hmac
@@ -144,7 +144,7 @@ class NoInboundTests(TestGenerator):
         return not config.inbound.enabled
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         primary_domain = config.mail.primary_domain
         allowed_sender = config.get_allowed_sender()
 

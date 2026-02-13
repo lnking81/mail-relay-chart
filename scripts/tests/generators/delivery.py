@@ -26,7 +26,7 @@ class DeliveryTests(TestGenerator):
         return True  # Always applicable
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         allowed_sender = config.get_allowed_sender()
 
         # Test: Internal to multiple external providers

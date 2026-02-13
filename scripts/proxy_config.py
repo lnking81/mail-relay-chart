@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Setup path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,7 +41,7 @@ def get_static_proxies() -> list[str]:
     if not static_env:
         return []
 
-    proxies = []
+    proxies: list[str] = []
     for item in static_env.split(","):
         item = item.strip()
         if item:
@@ -49,7 +50,9 @@ def get_static_proxies() -> list[str]:
     return proxies
 
 
-def detect_lb_ips(k8s_client: KubernetesClient, service_name: str = None) -> list[str]:
+def detect_lb_ips(
+    k8s_client: KubernetesClient, service_name: Optional[str] = None
+) -> list[str]:
     """
     Detect all IPs from LoadBalancer service status.
 
@@ -60,6 +63,7 @@ def detect_lb_ips(k8s_client: KubernetesClient, service_name: str = None) -> lis
     Returns:
         List of IP addresses from LoadBalancer ingress
     """
+    original_name: Optional[str] = None
     if service_name:
         # Temporarily override service name
         original_name = k8s_client.config.service_name
@@ -70,7 +74,7 @@ def detect_lb_ips(k8s_client: KubernetesClient, service_name: str = None) -> lis
         logger.info(f"Detected LoadBalancer IPs: {ips}")
         return ips
     finally:
-        if service_name:
+        if service_name and original_name is not None:
             k8s_client.config.service_name = original_name
 
 
@@ -87,7 +91,7 @@ def generate_hosts_config(ips: list[str]) -> str:
     if not ips:
         return "; No trusted proxies configured\nhosts[] ="
 
-    lines = []
+    lines: list[str] = []
     for ip in ips:
         lines.append(f"hosts[]={ip}")
 
@@ -129,7 +133,7 @@ def update_connection_ini(config_file: Path, hosts_config: str) -> bool:
     return True
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Configure Haraka trusted proxies from LoadBalancer"
     )
@@ -171,7 +175,7 @@ def main():
     logger.info("=== Proxy Protocol Auto-Configuration ===")
 
     # Collect all trusted proxies
-    all_proxies = []
+    all_proxies: list[str] = []
 
     # 1. Get static proxies
     static_proxies = get_static_proxies()
@@ -195,8 +199,8 @@ def main():
             logger.warning(f"Failed to detect LoadBalancer IPs: {e}")
 
     # Remove duplicates while preserving order
-    seen = set()
-    unique_proxies = []
+    seen: set[str] = set()
+    unique_proxies: list[str] = []
     for proxy in all_proxies:
         if proxy not in seen:
             seen.add(proxy)

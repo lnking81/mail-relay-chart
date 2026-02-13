@@ -14,7 +14,7 @@ from typing import Any, Optional
 import yaml
 
 
-def deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge two dictionaries. Override values take precedence."""
     result = copy.deepcopy(base)
     for key, value in override.items():
@@ -213,10 +213,10 @@ class TestConfig:
     haraka: HarakaConfig = field(default_factory=HarakaConfig)
 
     # Raw values dict for edge cases
-    _raw: dict = field(default_factory=dict, repr=False)
+    _raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_values(cls, values: dict) -> TestConfig:
+    def from_values(cls, values: dict[str, Any]) -> TestConfig:
         """Create TestConfig from parsed Helm values dict."""
         mail_dict = values.get("mail", {})
         inbound_dict = values.get("inbound", {})

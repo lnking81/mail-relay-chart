@@ -6,4 +6,24 @@ for a specific test category.
 """
 
 # Import all generators to trigger registration
-from . import auth, delivery, inbound, limits, outbound, relay, security, tls
+from . import (  # noqa: F401
+    auth,
+    delivery,
+    inbound,
+    limits,
+    outbound,
+    relay,
+    security,
+    tls,
+)
+
+__all__ = [
+    "auth",
+    "delivery",
+    "inbound",
+    "limits",
+    "outbound",
+    "relay",
+    "security",
+    "tls",
+]

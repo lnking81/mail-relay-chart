@@ -255,4 +255,32 @@ Used by dns-init and dns-watcher containers
   value: {{ range $domain, $zoneId := .Values.dns.cloudflare.zoneIds }}{{ $domain }}:{{ $zoneId }},{{ end }}
 {{- end }}
 {{- end }}
+{{/* PTR configuration */}}
+{{- if .Values.dns.ptr.enabled }}
+- name: PTR_ENABLED
+  value: "true"
+- name: PTR_PROVIDER
+  value: {{ .Values.dns.ptr.provider | quote }}
+- name: PTR_HOSTNAME
+  value: {{ .Values.dns.ptr.hostname | default .Values.mail.hostname | quote }}
+{{- if or (eq .Values.dns.ptr.provider "hetzner") (eq .Values.dns.ptr.provider "hetzner-cloud") }}
+- name: HETZNER_API_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.dns.hetzner.existingSecret | default (printf "%s-hetzner" (include "mail-relay.fullname" .)) }}
+      key: api-token
+{{- end }}
+{{- if eq .Values.dns.ptr.provider "hetzner-robot" }}
+- name: HETZNER_ROBOT_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.dns.hetznerRobot.existingSecret | default (printf "%s-hetzner-robot" (include "mail-relay.fullname" .)) }}
+      key: username
+- name: HETZNER_ROBOT_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.dns.hetznerRobot.existingSecret | default (printf "%s-hetzner-robot" (include "mail-relay.fullname" .)) }}
+      key: password
+{{- end }}
+{{- end }}
 {{- end }}

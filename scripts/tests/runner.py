@@ -10,7 +10,7 @@ import smtplib
 import socket
 import ssl
 from email.utils import formatdate, make_msgid
-from typing import Optional
+from typing import Callable, Optional
 
 from .base import Tag, TestCase, TestResult
 from .config import TestConfig
@@ -71,6 +71,8 @@ class SmtpTestRunner:
         context.verify_mode = ssl.CERT_NONE
 
         # Wrap socket with TLS
+        if smtp.sock is None:
+            raise smtplib.SMTPException("No socket available for STARTTLS")
         server_hostname = host if host and not host.startswith(".") else None
         smtp.sock = context.wrap_socket(smtp.sock, server_hostname=server_hostname)
         smtp.file = smtp.sock.makefile("rb")
@@ -91,8 +93,8 @@ class SmtpTestRunner:
         )
         date_str = formatdate(localtime=True)
 
-        headers = {
-            "From": test.from_header,
+        headers: dict[str, str] = {
+            "From": test.from_header or test.mail_from,
             "To": test.rcpt_to,
             "Subject": test.subject,
             "Date": date_str,
@@ -316,6 +318,9 @@ class SmtpTestRunner:
 
     def _handle_auth(self, smtp: smtplib.SMTP, test: TestCase) -> Optional[TestResult]:
         """Handle SMTP AUTH. Returns TestResult if auth completes the test."""
+        if not test.auth_user or not test.auth_pass:
+            return None  # No auth requested
+
         try:
             smtp.login(test.auth_user, test.auth_pass)
             if test.expect_auth_fail:
@@ -327,19 +332,24 @@ class SmtpTestRunner:
                     details="AUTH should have failed but succeeded",
                 )
         except smtplib.SMTPAuthenticationError as e:
+            error_msg = (
+                e.smtp_error.decode()
+                if isinstance(e.smtp_error, bytes)
+                else str(e.smtp_error)
+            )
             if test.expect_auth_fail:
                 return TestResult(
                     name=test.name,
                     passed=True,
                     expected="AUTH rejected",
-                    actual=f"{e.smtp_code} {e.smtp_error.decode()}",
+                    actual=f"{e.smtp_code} {error_msg}",
                     details="AUTH rejected as expected",
                 )
             return TestResult(
                 name=test.name,
                 passed=False,
                 expected="AUTH accepted",
-                actual=f"{e.smtp_code} {e.smtp_error.decode()}",
+                actual=f"{e.smtp_code} {error_msg}",
                 details="AUTH failed unexpectedly",
             )
         except smtplib.SMTPException as e:
@@ -389,7 +399,7 @@ class SmtpTestRunner:
         tests: list[TestCase],
         only_network: Optional[str] = None,
         only_tags: Optional[set[Tag]] = None,
-        callback=None,
+        callback: Optional[Callable[[TestCase, TestResult], None]] = None,
     ) -> list[TestResult]:
         """Run a list of tests.
 
@@ -402,7 +412,7 @@ class SmtpTestRunner:
         Returns:
             List of TestResult objects.
         """
-        results = []
+        results: list[TestResult] = []
 
         for test in tests:
             # Filter by network
@@ -422,7 +432,7 @@ class SmtpTestRunner:
         self.results = results
         return results
 
-    def get_summary(self) -> dict:
+    def get_summary(self) -> dict[str, int]:
         """Get test summary statistics.
 
         Returns:

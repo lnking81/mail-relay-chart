@@ -38,7 +38,7 @@ class DNSRecord:
     # Internal tracking
     record_id: Optional[str] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Normalize record name (remove trailing dot)
         self.name = self.name.rstrip(".")
 
@@ -105,10 +105,10 @@ class DNSProvider(ABC):
             f"heritage=mail-relay,owner={self.owner_id},record-type={record_type.value}"
         )
 
-    def _parse_ownership(self, content: str) -> Optional[dict]:
+    def _parse_ownership(self, content: str) -> Optional[dict[str, str]]:
         """Parse ownership TXT record content"""
         try:
-            parts = {}
+            parts: dict[str, str] = {}
             for part in content.split(","):
                 if "=" in part:
                     key, value = part.split("=", 1)
@@ -204,6 +204,24 @@ class DNSProvider(ABC):
             True if successful
         """
         pass
+
+    def set_ptr(self, ip: str, hostname: str) -> bool:
+        """
+        Set PTR (reverse DNS) record for an IP address.
+
+        Override this method for providers that support PTR management.
+
+        Args:
+            ip: IP address to set PTR for
+            hostname: Hostname for the PTR record
+
+        Returns:
+            True if successful
+        """
+        self.logger.warning(
+            f"PTR record management not supported by {type(self).__name__}"
+        )
+        return False
 
     # ==========================================================================
     # High-level operations with ownership tracking
@@ -327,6 +345,10 @@ class DNSProvider(ABC):
             self.logger.info("[DRY RUN] Would delete record")
             return True
 
+        if not record.record_id:
+            self.logger.error("Cannot delete record without record_id")
+            return False
+
         if self.delete_record(zone_id, record.record_id):
             return self._delete_ownership(zone_id, name, record_type)
         return False
@@ -373,13 +395,15 @@ class DNSProvider(ABC):
         for txt_record in ownership_records:
             parsed = self._parse_ownership(txt_record.content)
             if parsed and parsed.get("record-type") == record_type.value:
-                return self.delete_record(zone_id, txt_record.record_id)
+                if txt_record.record_id:
+                    return self.delete_record(zone_id, txt_record.record_id)
+                return False
 
         return True
 
     def list_owned_records(self, zone_id: str) -> list[DNSRecord]:
         """List all records owned by this instance in a zone"""
-        owned = []
+        owned: list[DNSRecord] = []
 
         # Find all ownership TXT records
         all_txt = self.list_records(zone_id, RecordType.TXT)

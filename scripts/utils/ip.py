@@ -1,16 +1,20 @@
-"""
-IP Detection Utilities
+"""IP Detection Utilities.
 
 Provides methods to detect external IP addresses from various sources.
 """
+
+from __future__ import annotations
 
 import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import requests
+
+if TYPE_CHECKING:
+    from utils.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +35,10 @@ class IPDetectorConfig:
     """IP detection configuration"""
 
     # Static IPs (if set, disables auto-detection)
-    static_ips: list[str] = None
+    static_ips: Optional[list[str]] = None
 
     # External APIs for IP detection
-    external_apis: list[str] = None
+    external_apis: Optional[list[str]] = None
 
     # Detect outbound NAT IP
     detect_outbound: bool = True
@@ -42,7 +46,7 @@ class IPDetectorConfig:
     # Request timeout
     timeout: int = 15
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.static_ips is None:
             self.static_ips = []
         if self.external_apis is None:
@@ -90,7 +94,7 @@ class IPDetector:
         if not self.config.detect_outbound:
             return None
 
-        for api_url in self.config.external_apis:
+        for api_url in self.config.external_apis or []:
             try:
                 response = requests.get(
                     api_url,
@@ -113,9 +117,11 @@ class IPDetector:
 
     def get_static_ips(self) -> list[str]:
         """Get configured static IPs"""
-        return list(self.config.static_ips)
+        return list(self.config.static_ips or [])
 
-    def get_incoming_ip(self, k8s_client=None, wait_timeout: int = 0) -> Optional[str]:
+    def get_incoming_ip(
+        self, k8s_client: Optional[KubernetesClient] = None, wait_timeout: int = 0
+    ) -> Optional[str]:
         """
         Get primary incoming IP address.
 
@@ -139,14 +145,16 @@ class IPDetector:
         # Fallback to outbound IP
         return self.detect_outbound_ip()
 
-    def get_all_ips(self, k8s_client=None, wait_timeout: int = 0) -> list[str]:
+    def get_all_ips(
+        self, k8s_client: Optional[KubernetesClient] = None, wait_timeout: int = 0
+    ) -> list[str]:
         """
         Get all IPs for SPF record (incoming + outbound if different).
 
         Returns:
             List of unique IP addresses
         """
-        ips = set()
+        ips: set[str] = set()
 
         # Static IPs
         if self.config.static_ips:
@@ -180,7 +188,7 @@ class IPDetector:
 
 
 def detect_ip(
-    k8s_client=None,
+    k8s_client: Optional[KubernetesClient] = None,
     wait_timeout: int = 0,
     config: Optional[IPDetectorConfig] = None,
 ) -> Optional[str]:

@@ -26,7 +26,7 @@ class AuthValidCredentialsTests(TestGenerator):
         return config.auth.enabled and config.auth.first_user is not None
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         test_user, test_pass = config.auth.first_user  # type: ignore
 
         # Test with TLS if required
@@ -111,7 +111,7 @@ class AuthInvalidCredentialsTests(TestGenerator):
         return config.auth.enabled and config.auth.first_user is not None
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         test_user, _ = config.auth.first_user  # type: ignore
         use_tls = config.tls.enabled and config.auth.require_tls
 

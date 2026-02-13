@@ -51,7 +51,7 @@ class OutboundDisallowedDomainTests(TestGenerator):
         return config.mail.sender_validation.enabled
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         sv = config.mail.sender_validation
         primary_domain = config.mail.primary_domain
 

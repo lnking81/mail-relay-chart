@@ -48,9 +48,9 @@ class KubernetesClient:
         self.config = config or KubernetesConfig.from_env()
         self.logger = logging.getLogger(__name__)
 
-    def _kubectl(self, *args, timeout: int = 30) -> tuple[bool, str]:
+    def _kubectl(self, *args: str, timeout: int = 30) -> tuple[bool, str]:
         """Execute kubectl command"""
-        cmd = ["kubectl", "-n", self.config.namespace] + list(args)
+        cmd = ["kubectl", "-n", self.config.namespace, *args]
 
         try:
             result = subprocess.run(
@@ -93,7 +93,7 @@ class KubernetesClient:
         This includes both external IP and internal/node IPs that
         some cloud providers expose (e.g., Hetzner with ipMode: Proxy).
         """
-        ips = []
+        ips: list[str] = []
 
         # Get all IPs from ingress array
         success, output = self._kubectl(

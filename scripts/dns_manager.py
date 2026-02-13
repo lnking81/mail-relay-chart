@@ -21,15 +21,33 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from dns import DNSRecord, RecordType, get_provider_from_env
-from dns.base import DNSProvider, RecordType
+from dns.base import DNSProvider, DNSRecord, RecordType
+from dns.registry import get_provider_from_env
 from utils.ip import IPDetector, IPDetectorConfig
 from utils.k8s import KubernetesClient, KubernetesConfig
+
+
+@dataclass
+class PTRConfig:
+    """PTR record configuration"""
+
+    enabled: bool = False
+    provider: str = ""  # e.g., "hetzner"
+    hostname: str = ""  # PTR hostname (defaults to mail.hostname)
+
+    @classmethod
+    def from_env(cls) -> "PTRConfig":
+        """Create config from environment variables"""
+        return cls(
+            enabled=os.environ.get("PTR_ENABLED", "false").lower() == "true",
+            provider=os.environ.get("PTR_PROVIDER", ""),
+            hostname=os.environ.get("PTR_HOSTNAME", ""),
+        )
 
 
 @dataclass
@@ -37,7 +55,7 @@ class MailConfig:
     """Mail relay configuration"""
 
     hostname: str  # FQDN for mail server
-    domains: list[dict]  # List of domains with dkimSelector
+    domains: list[dict[str, Any]]  # List of domains with dkimSelector
 
     # DNS record options
     create_a: bool = True
@@ -58,7 +76,7 @@ class MailConfig:
     @classmethod
     def from_env(cls) -> "MailConfig":
         """Create config from environment variables"""
-        domains = []
+        domains: list[dict[str, Any]] = []
         domains_json = os.environ.get("MAIL_DOMAINS", "")
         if domains_json:
             try:
@@ -95,6 +113,7 @@ class DNSManager:
     - SPF TXT record for each domain
     - DKIM TXT record for each domain
     - DMARC TXT record for each domain
+    - PTR record for mail server IP (via provider like Hetzner)
     """
 
     def __init__(
@@ -103,15 +122,72 @@ class DNSManager:
         mail_config: MailConfig,
         k8s_client: KubernetesClient,
         ip_detector: IPDetector,
+        ptr_config: Optional[PTRConfig] = None,
     ):
         self.provider = provider
         self.mail_config = mail_config
         self.k8s = k8s_client
         self.ip_detector = ip_detector
+        self.ptr_config = ptr_config or PTRConfig()
         self.logger = logging.getLogger(__name__)
 
         # Cache zone IDs
         self._zone_cache: dict[str, str] = {}
+
+        # PTR provider (initialized on demand)
+        self._ptr_provider: Optional[DNSProvider] = None
+
+    def _get_ptr_provider(self) -> Optional[DNSProvider]:
+        """Get PTR provider (lazy initialization)"""
+        if self._ptr_provider is None and self.ptr_config.enabled:
+            provider_name = self.ptr_config.provider.lower()
+
+            if provider_name == "hetzner" or provider_name == "hetzner-cloud":
+                from dns.hetzner import HetznerConfig, HetznerProvider
+
+                hz_config = HetznerConfig.from_env(self.provider.owner_id)
+                self._ptr_provider = HetznerProvider(hz_config)
+
+            elif provider_name == "hetzner-robot":
+                from dns.hetzner import HetznerRobotConfig, HetznerRobotProvider
+
+                robot_config = HetznerRobotConfig.from_env(self.provider.owner_id)
+                self._ptr_provider = HetznerRobotProvider(robot_config)
+
+            else:
+                self.logger.error(f"Unknown PTR provider: {provider_name}")
+
+        return self._ptr_provider
+
+    def _ensure_ptr_record(self, ip: str) -> bool:
+        """
+        Create/update PTR record for outbound IP.
+
+        PTR is checked by receiving servers when we SEND mail,
+        so it must match the IP from which outgoing connections originate.
+
+        Args:
+            ip: Outbound IP address to set PTR for
+
+        Returns:
+            True on success
+        """
+        if not self.ptr_config.enabled:
+            return True
+
+        ptr_provider = self._get_ptr_provider()
+        if not ptr_provider:
+            self.logger.warning("PTR provider not configured, skipping PTR setup")
+            return True  # Not a failure, just skip
+
+        hostname = self.ptr_config.hostname or self.mail_config.hostname
+
+        self.logger.info("\n--- PTR Record (outbound IP) ---")
+        self.logger.info(f"IP:       {ip}")
+        self.logger.info(f"Hostname: {hostname}")
+        self.logger.info(f"Provider: {self.ptr_config.provider}")
+
+        return ptr_provider.set_ptr(ip, hostname)
 
     def _get_zone_id(self, domain: str) -> Optional[str]:
         """Get zone ID with caching"""
@@ -150,7 +226,9 @@ class DNSManager:
         - dmarc_pct to 100 for full visibility
         """
         rua = self.mail_config.dmarc_rua or f"postmaster@{domain}"
-        pct = f"; pct={self.mail_config.dmarc_pct}" if self.mail_config.dmarc_pct else ""
+        pct = (
+            f"; pct={self.mail_config.dmarc_pct}" if self.mail_config.dmarc_pct else ""
+        )
         return f"v=DMARC1; p={self.mail_config.dmarc_policy}{pct}; rua=mailto:{rua}"
 
     def init_or_update(self, wait_for_lb: int = 300) -> bool:
@@ -173,9 +251,11 @@ class DNSManager:
             self.logger.error("Could not detect incoming IP address")
             return False
 
+        outbound_ip = self.ip_detector.detect_outbound_ip()
         all_ips = self.ip_detector.get_all_ips(self.k8s, wait_for_lb)
 
         self.logger.info(f"Incoming IP:  {incoming_ip}")
+        self.logger.info(f"Outbound IP:  {outbound_ip}")
         self.logger.info(f"All IPs:      {all_ips}")
         self.logger.info(f"Mail host:    {self.mail_config.hostname}")
         self.logger.info(
@@ -214,6 +294,14 @@ class DNSManager:
 
             if self.mail_config.create_dmarc:
                 success &= self._ensure_dmarc_record(zone_id, domain)
+
+        # PTR record for outbound IP (used for mail delivery)
+        if self.ptr_config.enabled:
+            ptr_ip = outbound_ip or incoming_ip
+            if ptr_ip:
+                success &= self._ensure_ptr_record(ptr_ip)
+            else:
+                self.logger.warning("No outbound IP detected, skipping PTR setup")
 
         self.logger.info("\n" + "=" * 60)
         if success:
@@ -337,7 +425,7 @@ class DNSManager:
 
         while True:
             all_verified = True
-            status = []
+            status: list[str] = []
 
             # Check A record
             if self.mail_config.create_a:
@@ -378,9 +466,9 @@ class DNSManager:
             self.logger.info(f"[{elapsed}s/{timeout}s] {' '.join(status)}")
             time.sleep(interval)
 
-    def status(self) -> dict:
+    def status(self) -> dict[str, Any]:
         """Get current DNS status"""
-        result = {
+        result: dict[str, Any] = {
             "owner_id": self.provider.owner_id,
             "domains": {},
         }
@@ -389,7 +477,7 @@ class DNSManager:
             domain = domain_cfg["name"]
             zone_id = self._get_zone_id(domain)
 
-            domain_status = {
+            domain_status: dict[str, Any] = {
                 "zone_id": zone_id,
                 "records": [],
             }
@@ -424,7 +512,7 @@ class DNSManager:
         Returns:
             Tuple of (all_correct, list of issues)
         """
-        issues = []
+        issues: list[str] = []
 
         # Check A record for mail hostname
         if self.mail_config.create_a:
@@ -507,7 +595,7 @@ class DNSManager:
         return (len(issues) == 0, issues)
 
 
-def setup_logging(verbose: bool = False):
+def setup_logging(verbose: bool = False) -> None:
     """Configure logging"""
     level = logging.DEBUG if verbose else logging.INFO
 
@@ -518,7 +606,7 @@ def setup_logging(verbose: bool = False):
     )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="DNS Manager for Mail Relay",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -583,7 +671,9 @@ def main():
     ip_config = IPDetectorConfig.from_env()
     ip_detector = IPDetector(ip_config)
 
-    manager = DNSManager(provider, mail_config, k8s, ip_detector)
+    ptr_config = PTRConfig.from_env()
+
+    manager = DNSManager(provider, mail_config, k8s, ip_detector, ptr_config)
 
     # Shared directory for watcher communication
     shared_dir = Path(os.environ.get("SHARED_DIR", "/shared"))
@@ -600,7 +690,7 @@ def main():
 
             if incoming_ip:
                 # Save full state as JSON
-                state = {
+                state: dict[str, Any] = {
                     "incoming_ip": incoming_ip,
                     "outbound_ip": outbound_ip or "",
                     "all_ips": all_ips,

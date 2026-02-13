@@ -7,7 +7,7 @@ Uses Cloudflare API v4 for DNS record management with ownership tracking.
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -25,7 +25,7 @@ class CloudflareConfig(DNSProviderConfig):
 
     # Explicit zone ID mapping: domain -> zone_id
     # If not specified, zones are auto-discovered
-    zone_ids: dict[str, str] = field(default_factory=dict)
+    zone_ids: dict[str, str] = field(default_factory=lambda: {})
 
     # Enable Cloudflare proxy (orange cloud) for A/CNAME records
     proxied: bool = False
@@ -39,7 +39,7 @@ class CloudflareConfig(DNSProviderConfig):
     @classmethod
     def from_env(cls, owner_id: str) -> "CloudflareConfig":
         """Create config from environment variables"""
-        zone_ids = {}
+        zone_ids: dict[str, str] = {}
 
         # Parse CLOUDFLARE_ZONE_IDS: "domain1:zone1,domain2:zone2"
         zone_ids_env = os.environ.get("CLOUDFLARE_ZONE_IDS", "")
@@ -91,9 +91,9 @@ class CloudflareProvider(DNSProvider):
         self,
         method: str,
         endpoint: str,
-        params: Optional[dict] = None,
-        json_data: Optional[dict] = None,
-    ) -> dict:
+        params: Optional[dict[str, Any]] = None,
+        json_data: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Make API request to Cloudflare"""
         url = f"{self.cf_config.api_base}{endpoint}"
 
@@ -106,7 +106,7 @@ class CloudflareProvider(DNSProvider):
                 timeout=self.cf_config.timeout,
             )
 
-            data = response.json()
+            data: dict[str, Any] = response.json()
 
             if not data.get("success", False):
                 errors = data.get("errors", [])
@@ -143,7 +143,7 @@ class CloudflareProvider(DNSProvider):
 
                 results = data.get("result", [])
                 if results:
-                    zone_id = results[0]["id"]
+                    zone_id: str = results[0]["id"]
                     # Cache both the requested domain and found zone domain
                     self._zone_cache[domain] = zone_id
                     self._zone_cache[check_domain] = zone_id
@@ -168,14 +168,14 @@ class CloudflareProvider(DNSProvider):
         name: Optional[str] = None,
     ) -> list[DNSRecord]:
         """List DNS records in a zone with optional filtering"""
-        params = {"per_page": 100}
+        params: dict[str, Any] = {"per_page": 100}
 
         if record_type:
             params["type"] = record_type.value
         if name:
             params["name"] = name
 
-        records = []
+        records: list[DNSRecord] = []
         page = 1
 
         while True:
@@ -211,7 +211,7 @@ class CloudflareProvider(DNSProvider):
 
     def create_record(self, zone_id: str, record: DNSRecord) -> bool:
         """Create a new DNS record"""
-        data = {
+        data: dict[str, Any] = {
             "type": record.type.value,
             "name": record.name,
             "content": record.content,
@@ -245,7 +245,7 @@ class CloudflareProvider(DNSProvider):
             self.logger.error(f"Cannot update record without record_id: {record.name}")
             return False
 
-        data = {
+        data: dict[str, Any] = {
             "type": record.type.value,
             "name": record.name,
             "content": record.content,
@@ -299,6 +299,6 @@ class CloudflareProvider(DNSProvider):
 class CloudflareAPIError(Exception):
     """Cloudflare API error"""
 
-    def __init__(self, message: str, errors: Optional[list] = None):
+    def __init__(self, message: str, errors: Optional[list[dict[str, Any]]] = None):
         super().__init__(message)
         self.errors = errors or []

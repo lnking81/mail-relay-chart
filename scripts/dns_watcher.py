@@ -24,11 +24,13 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
+from typing import Any, Optional
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from dns import get_provider_from_env
+from dns.registry import get_provider_from_env
 from dns_manager import DNSManager, MailConfig
 from utils.ip import IPDetector, IPDetectorConfig
 from utils.k8s import KubernetesClient, KubernetesConfig
@@ -43,13 +45,13 @@ class SavedState:
 
     incoming_ip: str = ""
     outbound_ip: str = ""
-    all_ips: list[str] = None
+    all_ips: Optional[list[str]] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.all_ips is None:
             self.all_ips = []
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "incoming_ip": self.incoming_ip,
             "outbound_ip": self.outbound_ip,
@@ -57,21 +59,21 @@ class SavedState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SavedState":
+    def from_dict(cls, data: dict[str, Any]) -> "SavedState":
         return cls(
-            incoming_ip=data.get("incoming_ip", ""),
-            outbound_ip=data.get("outbound_ip", ""),
-            all_ips=data.get("all_ips", []),
+            incoming_ip=str(data.get("incoming_ip", "")),
+            outbound_ip=str(data.get("outbound_ip", "")),
+            all_ips=list(data.get("all_ips", [])),
         )
 
 
-def signal_handler(signum, frame):
+def signal_handler(signum: int, frame: Optional[FrameType]) -> None:
     """Handle termination signals"""
     logging.info(f"Received signal {signum}, initiating shutdown...")
     shutdown_event.set()
 
 
-def setup_logging(verbose: bool = False):
+def setup_logging(verbose: bool = False) -> None:
     """Configure logging"""
     level = logging.DEBUG if verbose else logging.INFO
 
@@ -100,7 +102,7 @@ def read_saved_state(shared_dir: Path) -> SavedState:
     return SavedState()
 
 
-def save_state(shared_dir: Path, state: SavedState):
+def save_state(shared_dir: Path, state: SavedState) -> None:
     """Save state to shared volume"""
     state_file = shared_dir / "dns-state.json"
     state_file.write_text(json.dumps(state.to_dict()))
@@ -111,13 +113,13 @@ def save_state(shared_dir: Path, state: SavedState):
         ip_file.write_text(state.incoming_ip)
 
 
-def create_kill_marker(shared_dir: Path):
+def create_kill_marker(shared_dir: Path) -> None:
     """Create marker file to signal pod restart"""
     marker_file = shared_dir / "kill-pod"
     marker_file.touch()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="DNS Watcher for Mail Relay")
 
     parser.add_argument(
@@ -170,6 +172,7 @@ def main():
 
     # Wait for init container to save initial state
     logger.info("Waiting for initial state from init container...")
+    saved_state = SavedState()  # Initialize with empty state
     while not shutdown_event.is_set():
         saved_state = read_saved_state(shared_dir)
         if saved_state.incoming_ip:
@@ -208,7 +211,7 @@ def main():
 
         saved_state = read_saved_state(shared_dir)
         needs_update = False
-        reasons = []
+        reasons: list[str] = []
 
         # Check for IP changes (both incoming and outbound)
         if current_incoming != saved_state.incoming_ip:

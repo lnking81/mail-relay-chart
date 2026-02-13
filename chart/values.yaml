@@ -460,6 +460,63 @@ dns:
     # Only affects A/CNAME records, TXT records are never proxied
     proxied: false
 
+  # === PTR (Reverse DNS) Management ===
+  # Automatic PTR record configuration for mail server IPs.
+  # Required for proper email delivery - receiving servers check PTR records.
+  # PTR must match mail hostname (forward-confirmed reverse DNS).
+  ptr:
+    # Enable PTR record management
+    enabled: false
+
+    # PTR provider: "hetzner" (Cloud), "hetzner-robot" (Dedicated)
+    # Each provider has its own configuration section below
+    provider: hetzner
+
+    # Hostname for PTR record (default: mail.hostname)
+    # Must resolve to the same IP (forward-confirmed reverse DNS)
+    hostname: ""
+
+    # IP detection mode:
+    # - "auto": Detect from LoadBalancer Service status
+    # - "static": Use staticIp value below
+    ipMode: "auto"
+
+    # Static IP for PTR (when ipMode: static)
+    staticIp: ""
+
+    # Update PTR on every helm upgrade (not just install)
+    # Useful when IP changes frequently
+    updateOnUpgrade: true
+
+  # === Hetzner Cloud Provider ===
+  # Used for PTR record management via Hetzner Cloud API.
+  # Works with: Server IPs, Primary IPs, Floating IPs.
+  # Does NOT work with Load Balancer IPs (use annotation instead).
+  hetzner:
+    # Hetzner Cloud API Token
+    # Create at: https://console.hetzner.cloud/projects/{project}/security/tokens
+    # Required permissions: Read & Write (for server/IP management)
+    apiToken: ""
+
+    # Use existing secret for API token
+    # Secret must have key: api-token
+    existingSecret: ""
+
+  # === Hetzner Robot Provider (Dedicated Servers) ===
+  # Used for PTR record management on Hetzner dedicated servers.
+  # Requires Robot Webservice credentials (different from Cloud API).
+  hetznerRobot:
+    # Robot Webservice username
+    # Create at: https://robot.your-server.de/preferences/index -> Webservice
+    username: ""
+
+    # Robot Webservice password
+    password: ""
+
+    # Use existing secret for credentials
+    # Secret must have keys: username, password
+    existingSecret: ""
+
   # external-dns integration (when provider: external-dns)
   externalDns:
     # Create DNSEndpoint custom resource

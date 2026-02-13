@@ -41,6 +41,7 @@ from tests import (
     Tag,
     TestCase,
     TestConfig,
+    TestResult,
     generate_tests,
     list_generators,
 )
@@ -48,7 +49,7 @@ from tests import (
 
 def parse_tags(tags_str: str) -> set[Tag]:
     """Parse comma-separated tag names into Tag set."""
-    tags = set()
+    tags: set[Tag] = set()
     for name in tags_str.split(","):
         name = name.strip().upper()
         try:
@@ -58,7 +59,7 @@ def parse_tags(tags_str: str) -> set[Tag]:
     return tags
 
 
-def print_test_short(test: TestCase, result) -> None:
+def print_test_short(test: TestCase, result: TestResult) -> None:
     """Print single-line test result."""
     status = "✅" if result.passed else "❌"
     expect = "ACCEPT" if test.expect_accept else "REJECT"
@@ -69,7 +70,7 @@ def print_test_short(test: TestCase, result) -> None:
     )
 
 
-def print_test_verbose(test: TestCase, result, server: str) -> None:
+def print_test_verbose(test: TestCase, result: TestResult, server: str) -> None:
     """Print detailed test result."""
     print(f"\n{'=' * 60}")
     print(f"TEST: {test.name}")
@@ -203,7 +204,7 @@ def main() -> int:
 
     if args.debug:
         print("\n=== Merged Values ===")
-        print(yaml.dump(config._raw, default_flow_style=False))
+        print(yaml.dump(config._raw, default_flow_style=False))  # pyright: ignore[reportPrivateUsage]
         print("=" * 40)
 
     # Parse tags filter
@@ -271,7 +272,7 @@ def main() -> int:
         print(f"Tests: {len(tests)}")
 
     # Run tests with callback for output
-    def on_test_complete(test: TestCase, result):
+    def on_test_complete(test: TestCase, result: TestResult) -> None:
         if args.short:
             print_test_short(test, result)
         else:

@@ -57,14 +57,15 @@ import smtplib
 import socket
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Optional
+from types import FrameType
+from typing import Any, Optional
 
 import requests
 
@@ -75,9 +76,10 @@ shutdown_event = threading.Event()
 try:
     import dns.resolver
 
-    HAS_DNSPYTHON = True
+    _has_dnspython = True
 except ImportError:
-    HAS_DNSPYTHON = False
+    dns = None  # type: ignore[assignment]
+    _has_dnspython = False
 
 # === DNSBLs that work with public resolvers (FREE) ===
 FREE_IP_BLACKLISTS = [
@@ -194,11 +196,11 @@ class BlacklistConfig:
     )
 
     # Domains to check (from mail.domains)
-    domains: list[str] = field(default_factory=list)
+    domains: list[str] = field(default_factory=lambda: [])
 
     # Alert configuration
     alert_enabled: bool = False
-    alert_recipients: list[str] = field(default_factory=list)
+    alert_recipients: list[str] = field(default_factory=lambda: [])
     alert_from: str = ""
     alert_subject_prefix: str = "[BLACKLIST ALERT]"
     alert_cooldown_hours: int = 24
@@ -217,41 +219,39 @@ class BlacklistConfig:
     def from_env(cls) -> "BlacklistConfig":
         """Create config from environment variables"""
         # IP blacklists
-        lists = os.environ.get("BLACKLIST_LISTS", "")
-        if lists:
-            lists = [l.strip() for l in lists.split(",") if l.strip()]
+        lists_env = os.environ.get("BLACKLIST_LISTS", "")
+        if lists_env:
+            lists = [x.strip() for x in lists_env.split(",") if x.strip()]
         else:
             lists = DEFAULT_IP_BLACKLISTS.copy()
 
         custom_lists = os.environ.get("BLACKLIST_CUSTOM_LISTS", "")
         if custom_lists:
-            lists.extend([l.strip() for l in custom_lists.split(",") if l.strip()])
+            lists.extend([x.strip() for x in custom_lists.split(",") if x.strip()])
 
         # Domain blacklists
-        domain_lists = os.environ.get("BLACKLIST_DOMAIN_LISTS", "")
-        if domain_lists:
-            domain_lists = [l.strip() for l in domain_lists.split(",") if l.strip()]
+        domain_lists_env = os.environ.get("BLACKLIST_DOMAIN_LISTS", "")
+        if domain_lists_env:
+            domain_lists = [x.strip() for x in domain_lists_env.split(",") if x.strip()]
         else:
             domain_lists = DEFAULT_DOMAIN_BLACKLISTS.copy()
 
         custom_domain_lists = os.environ.get("BLACKLIST_CUSTOM_DOMAIN_LISTS", "")
         if custom_domain_lists:
             domain_lists.extend(
-                [l.strip() for l in custom_domain_lists.split(",") if l.strip()]
+                [x.strip() for x in custom_domain_lists.split(",") if x.strip()]
             )
 
         # Domains to check
-        domains = os.environ.get("BLACKLIST_DOMAINS", "")
-        if domains:
-            domains = [d.strip() for d in domains.split(",") if d.strip()]
-        else:
-            domains = []
+        domains_env = os.environ.get("BLACKLIST_DOMAINS", "")
+        domains: list[str] = []
+        if domains_env:
+            domains = [d.strip() for d in domains_env.split(",") if d.strip()]
 
-        recipients = os.environ.get("BLACKLIST_ALERT_RECIPIENTS", "")
-        if recipients:
-            recipients = [r.strip() for r in recipients.split(",") if r.strip()]
-        else:
-            recipients = []
+        recipients_env = os.environ.get("BLACKLIST_ALERT_RECIPIENTS", "")
+        recipients: list[str] = []
+        if recipients_env:
+            recipients = [r.strip() for r in recipients_env.split(",") if r.strip()]
 
         return cls(
             interval=int(os.environ.get("BLACKLIST_INTERVAL", "3600")),
@@ -308,13 +308,13 @@ class BlacklistChecker:
 
         # Setup custom DNS resolver if specified
         self.resolver = None
-        if config.dns_server and HAS_DNSPYTHON:
-            self.resolver = dns.resolver.Resolver()
+        if config.dns_server and _has_dnspython:
+            self.resolver = dns.resolver.Resolver()  # pyright: ignore[reportOptionalMemberAccess]
             self.resolver.nameservers = [config.dns_server]
             self.resolver.timeout = 5
             self.resolver.lifetime = 10
             self.logger.info(f"Using custom DNS resolver: {config.dns_server}")
-        elif config.dns_server and not HAS_DNSPYTHON:
+        elif config.dns_server and not _has_dnspython:
             self.logger.warning(
                 "Custom DNS server specified but dnspython not installed. "
                 "Install with: pip install dnspython"
@@ -344,11 +344,11 @@ class BlacklistChecker:
         if self.resolver:
             try:
                 answers = self.resolver.resolve(query, "A")
-                return str(answers[0])
+                return str(answers[0])  # pyright: ignore[reportUnknownArgumentType]
             except (
-                dns.resolver.NXDOMAIN,
-                dns.resolver.NoAnswer,
-                dns.resolver.NoNameservers,
+                dns.resolver.NXDOMAIN,  # pyright: ignore[reportOptionalMemberAccess]
+                dns.resolver.NoAnswer,  # pyright: ignore[reportOptionalMemberAccess]
+                dns.resolver.NoNameservers,  # pyright: ignore[reportOptionalMemberAccess]
             ):
                 return None
             except Exception as e:
@@ -473,10 +473,10 @@ class BlacklistChecker:
 
     def check_all_ips(self, ip: str) -> list[BlacklistResult]:
         """Check IP against all configured IP DNSBLs in parallel"""
-        results = []
+        results: list[BlacklistResult] = []
 
         with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = {
+            futures: dict[Future[BlacklistResult], str] = {
                 executor.submit(self.check_ip, ip, dnsbl): dnsbl
                 for dnsbl in self.config.lists
             }
@@ -493,10 +493,10 @@ class BlacklistChecker:
 
     def check_all_domains(self, domains: list[str]) -> list[BlacklistResult]:
         """Check domains against all configured domain blacklists in parallel"""
-        results = []
+        results: list[BlacklistResult] = []
 
         with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = {}
+            futures: dict[Future[BlacklistResult], tuple[str, str]] = {}
             for domain in domains:
                 for dnsbl in self.config.domain_lists:
                     future = executor.submit(self.check_domain, domain, dnsbl)
@@ -531,11 +531,11 @@ class MetricsHandler(BaseHTTPRequestHandler):
     # Backward compat
     results: list[BlacklistResult] = []
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args: object) -> None:
         """Suppress default HTTP logging"""
         pass
 
-    def handle_one_request(self):
+    def handle_one_request(self) -> None:
         """Handle a single HTTP request, suppressing connection errors.
 
         Kubernetes health probes and load balancers may send incomplete
@@ -548,7 +548,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             # Client disconnected - expected for health probes
             pass
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         if self.path == "/metrics":
             self.send_metrics()
         elif self.path == "/health":
@@ -560,9 +560,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def send_metrics(self):
+    def send_metrics(self) -> None:
         """Generate Prometheus metrics"""
-        lines = []
+        lines: list[str] = []
 
         # IP blacklist status
         lines.append(
@@ -634,7 +634,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             "# HELP mail_relay_blacklist_domain_listed_count Number of domain blacklists where domain is listed"
         )
         lines.append("# TYPE mail_relay_blacklist_domain_listed_count gauge")
-        domains_seen = set()
+        domains_seen: set[str] = set()
         for result in self.domain_results:
             if result.target not in domains_seen:
                 domain_listed = sum(
@@ -687,7 +687,7 @@ class AlertManager:
         cooldown = timedelta(hours=self.config.alert_cooldown_hours)
         return datetime.now(timezone.utc) - last_alert > cooldown
 
-    def mark_alerted(self, result: BlacklistResult):
+    def mark_alerted(self, result: BlacklistResult) -> None:
         """Mark that we've sent an alert for this target/DNSBL combo"""
         key = f"{result.target_type}:{result.target}:{result.dnsbl}"
         self.cooldown_cache[key] = datetime.now(timezone.utc)
@@ -695,8 +695,8 @@ class AlertManager:
     def send_email_alert(
         self,
         ip_results: list[BlacklistResult],
-        domain_results: list[BlacklistResult] = None,
-    ):
+        domain_results: Optional[list[BlacklistResult]] = None,
+    ) -> None:
         """Send email alert for listed IPs and domains"""
         if not self.config.alert_enabled or not self.config.alert_recipients:
             return
@@ -713,7 +713,7 @@ class AlertManager:
         total = len(ip_listed) + len(domain_listed)
         subject = f"{self.config.alert_subject_prefix} Found on {total} blacklist(s)"
 
-        body_lines = []
+        body_lines: list[str] = []
 
         if ip_listed:
             body_lines.extend(
@@ -788,8 +788,8 @@ class AlertManager:
     def send_webhook_alert(
         self,
         ip_results: list[BlacklistResult],
-        domain_results: list[BlacklistResult] = None,
-    ):
+        domain_results: Optional[list[BlacklistResult]] = None,
+    ) -> None:
         """Send webhook notification for listed IPs and domains"""
         if not self.config.webhook_enabled or not self.config.webhook_url:
             return
@@ -802,7 +802,7 @@ class AlertManager:
         if not ip_listed and not domain_listed:
             return
 
-        payload = {
+        payload: dict[str, Any] = {
             "event": "blacklist_alert",
             "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "ip_listings": [
@@ -838,13 +838,13 @@ class AlertManager:
             self.logger.error(f"Failed to send webhook alert: {e}")
 
 
-def signal_handler(signum, frame):
+def signal_handler(signum: int, frame: FrameType | None) -> None:
     """Handle termination signals"""
     logging.info(f"Received signal {signum}, initiating shutdown...")
     shutdown_event.set()
 
 
-def setup_logging(verbose: bool = False):
+def setup_logging(verbose: bool = False) -> None:
     """Configure logging"""
     level = logging.DEBUG if verbose else logging.INFO
 
@@ -869,8 +869,8 @@ def get_current_ip(shared_dir: Path, config: BlacklistConfig) -> Optional[str]:
     state_file = shared_dir / "dns-state.json"
     if state_file.exists():
         try:
-            data = json.loads(state_file.read_text())
-            ip = data.get("incoming_ip") or data.get("outbound_ip")
+            data: dict[str, str] = json.loads(state_file.read_text())
+            ip: str = data.get("incoming_ip") or data.get("outbound_ip") or ""
             if ip:
                 return ip
         except (json.JSONDecodeError, KeyError):
@@ -922,13 +922,13 @@ def start_metrics_server(port: int) -> HTTPServer:
     return server
 
 
-def run_server(server: HTTPServer):
+def run_server(server: HTTPServer) -> None:
     """Run HTTP server until shutdown"""
     while not shutdown_event.is_set():
         server.handle_request()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Blacklist Monitor for Mail Relay")
 
     parser.add_argument(

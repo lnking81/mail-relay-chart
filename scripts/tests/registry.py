@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .base import Tag, TestCase, TestGenerator
 
@@ -109,7 +109,7 @@ def discover_generators(package_name: str = "tests.generators") -> None:
             importlib.import_module(full_modname)
 
 
-def list_generators() -> list[dict]:
+def list_generators() -> list[dict[str, Any]]:
     """List all registered generators with their metadata.
 
     Returns:

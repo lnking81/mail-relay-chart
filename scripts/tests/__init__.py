@@ -23,7 +23,7 @@ Example usage:
 
 # Core classes
 # Import generators to trigger registration
-from . import generators  # noqa: F401
+from . import generators  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from .base import Tag, TestCase, TestGenerator, TestResult
 from .config import TestConfig
 

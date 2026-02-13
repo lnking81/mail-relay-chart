@@ -79,7 +79,7 @@ class TestCase:
     expect_accept: bool = True
     expect_code: Optional[int] = None
     skip_data: bool = False
-    headers: dict = field(default_factory=dict)
+    headers: dict[str, str] = field(default_factory=lambda: {})
     # TLS options
     use_tls: bool = False
     require_tls: bool = False
@@ -90,9 +90,9 @@ class TestCase:
     # Size testing
     body_size: Optional[int] = None
     # Tags for filtering
-    tags: set[Tag] = field(default_factory=set)
+    tags: set[Tag] = field(default_factory=lambda: set())
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.from_header is None:
             self.from_header = self.mail_from
 

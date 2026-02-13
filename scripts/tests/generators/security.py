@@ -26,7 +26,7 @@ class SpfTests(TestGenerator):
         return config.inbound.enabled and config.inbound.security.spf.enabled
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         primary_domain = config.mail.primary_domain
         spf = config.inbound.security.spf
 
@@ -114,7 +114,7 @@ class DmarcTests(TestGenerator):
         return config.inbound.enabled and config.inbound.security.dmarc.enabled
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         primary_domain = config.mail.primary_domain
         dmarc = config.inbound.security.dmarc
 

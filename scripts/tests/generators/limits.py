@@ -26,7 +26,7 @@ class MessageSizeTests(TestGenerator):
         return config.haraka.max_message_size > 0
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         allowed_sender = config.get_allowed_sender()
         max_size = config.haraka.max_message_size
 
@@ -77,7 +77,7 @@ class RegexPatternTests(TestGenerator):
         return sv.enabled and len(sv.get_regex_patterns()) > 0
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         primary_domain = config.mail.primary_domain
         regex_patterns = config.mail.sender_validation.get_regex_patterns()
 
@@ -124,7 +124,7 @@ class MultiDomainTests(TestGenerator):
         return config.mail.secondary_domain is not None
 
     def generate(self, config: TestConfig) -> list[TestCase]:
-        tests = []
+        tests: list[TestCase] = []
         secondary_domain = config.mail.secondary_domain
         sv = config.mail.sender_validation
 
