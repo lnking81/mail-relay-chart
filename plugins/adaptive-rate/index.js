@@ -3,9 +3,17 @@
 const fs = require('fs');
 const path = require('path');
 
-// DELAY constant for send_email hook
-// Haraka outbound accepts 'DELAY' string as return code
-const DELAY = 'DELAY';
+// Haraka hook return codes
+// DENYSOFT causes the message to be re-queued for retry (temporary failure)
+// Haraka will retry the message later according to its outbound retry schedule.
+// Our hooks re-evaluate on each retry, so the message is held until the
+// rate-limit window expires.
+let DENYSOFT;
+try {
+    DENYSOFT = require('haraka-constants').denysoft;
+} catch (e) {
+    DENYSOFT = 903; // Known numeric value
+}
 
 /**
  * Haraka Adaptive Rate Limiting Plugin
@@ -59,7 +67,15 @@ const DELAY = 'DELAY';
  * - On deferred without rate limit (450, 451, 452, etc.): no delay increase
  *   (these are typically recipient-specific, not provider-wide)
  * - On delivered: delay decreases after threshold successes (recovery)
- * - On send_email: apply delay if time since last send < current delay
+ * - On send_email: block/delay delivery using DENYSOFT (requeue) or setTimeout
+ *
+ * THROTTLING MECHANISM:
+ * All blocking uses DENYSOFT to requeue the message back to Haraka's retry queue.
+ * On each retry attempt, our send_email hook re-evaluates the rate-limit state:
+ * - If still within a pause window → DENYSOFT again
+ * - If pause expired → allow delivery
+ * This avoids holding outbound slots (setTimeout thundering herd problem)
+ * and lets Haraka's retry scheduler spread retries naturally.
  *
  * CIRCUIT BREAKER:
  * When consecutive rate-limit failures reach threshold, the "circuit opens":
@@ -835,18 +851,17 @@ exports.on_send_email = function (next, hmail) {
     const now = Date.now();
 
     // CIRCUIT BREAKER CHECK
-    // If circuit is open, delay ALL sends until it closes
+    // If circuit is open, BLOCK ALL sends via DENYSOFT (requeue for retry)
     if (state.circuitOpenUntil > now) {
         const remainingPause = state.circuitOpenUntil - now;
-        const delaySeconds = Math.ceil(remainingPause / 1000);
-        plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - pausing ${remainingPause}ms (closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
+        plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - DENYSOFT requeue (closes at ${new Date(state.circuitOpenUntil).toISOString()}, ${Math.ceil(remainingPause / 1000)}s remaining)`);
 
         // Record metric: delay applied (due to circuit breaker)
         if (metricsInitialized && metrics.delaysAppliedCounter) {
             try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
 
-        return next(DELAY, delaySeconds);
+        return next(DENYSOFT, `Circuit breaker open for ${mxProvider}, retry after ${new Date(state.circuitOpenUntil).toISOString()}`);
     }
 
     // Circuit was open but now closed - gradual recovery, NOT full reset
@@ -863,15 +878,14 @@ exports.on_send_email = function (next, hmail) {
     // This ensures immediate throttling even before circuit breaker threshold is reached
     if (state.noSendUntil > now) {
         const remainingPause = state.noSendUntil - now;
-        const delaySeconds = Math.ceil(remainingPause / 1000);
-        plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - delaying ${remainingPause}ms (rate limit backoff, streak: ${state.consecutiveRateLimitFailures})`);
 
         // Record metric: delay applied
         if (metricsInitialized && metrics.delaysAppliedCounter) {
             try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
 
-        return next(DELAY, delaySeconds);
+        plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingPause / 1000)}s remaining, streak: ${state.consecutiveRateLimitFailures})`);
+        return next(DENYSOFT, `Rate limit backoff for ${mxProvider}, retry after ${new Date(state.noSendUntil).toISOString()}`);
     }
 
     // Calculate time since last send
@@ -884,18 +898,13 @@ exports.on_send_email = function (next, hmail) {
         const remainingDelay = state.delay - timeSinceLastSend;
 
         if (remainingDelay > 0) {
-            const delaySeconds = Math.ceil(remainingDelay / 1000);
-            plugin.loginfo(`Adaptive rate: Delaying ${mxProvider} by ${remainingDelay}ms (rate limit streak: ${state.consecutiveRateLimitFailures}, last send: ${timeSinceLastSend}ms ago)`);
-
-            // Update last send time to prevent other concurrent sends from skipping delay
-            state.lastSendTime = now + remainingDelay;
-
             // Record metric: delay applied
             if (metricsInitialized && metrics.delaysAppliedCounter) {
                 try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
             }
 
-            return next(DELAY, delaySeconds);
+            plugin.loginfo(`Adaptive rate: Throttling ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingDelay / 1000)}s until next allowed send, streak: ${state.consecutiveRateLimitFailures})`);
+            return next(DENYSOFT, `Rate limit throttle for ${mxProvider}`);
         }
     }
 
