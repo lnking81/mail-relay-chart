@@ -1040,7 +1040,6 @@ exports.on_deferred = function (next, hmail, params) {
 
     state.totalDeferred++;
     state.consecutiveFailures++;      // Track all failures for monitoring
-    state.consecutiveSuccesses = 0;
     state.lastUpdate = Date.now();
     state.lastError = errMsg.substring(0, 200);
 
@@ -1056,6 +1055,10 @@ exports.on_deferred = function (next, hmail, params) {
     const isRateLimited = /421|4\.7\.28|rate.?limit|too.?many|try.?again.?later|throttl/i.test(errMsg);
 
     if (isRateLimited) {
+        // Only reset success streak for rate-limit errors
+        // Non-rate-limit deferrals (mailbox full, etc.) are recipient-specific
+        // and should NOT block recovery of provider-wide rate limiting
+        state.consecutiveSuccesses = 0;
         state.consecutiveRateLimitFailures++;  // Track rate limit streak separately
         state.totalRateLimited++;
 

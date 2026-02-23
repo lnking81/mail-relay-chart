@@ -714,6 +714,48 @@ test('recovery: delay decreases after success threshold', () => {
         `Delay should decrease after ${3} successes: ${delayAfterFailure} -> ${afterRecovery.delay_ms}`);
 });
 
+test('recovery: non-rate-limit deferral does NOT reset success streak', () => {
+    adaptiveRate.reset_all();
+
+    const hmail = createMockHmail('gmail.com', 'smtp.google.com');
+
+    // Create rate limit failure first (so delay is elevated)
+    adaptiveRate.on_send_email.call(plugin, () => { }, hmail);
+    adaptiveRate.on_deferred.call(plugin, () => { }, hmail, {
+        err: { message: '421 Rate limited' },
+        host: 'smtp.google.com'
+    });
+
+    const afterFailure = adaptiveRate.get_domain_stats('google.com');
+    const delayAfterFailure = afterFailure.delay_ms;
+
+    // Now deliver 2 successes (threshold is 3)
+    adaptiveRate.on_delivered.call(plugin, () => { }, hmail, ['smtp.google.com']);
+    adaptiveRate.on_delivered.call(plugin, () => { }, hmail, ['smtp.google.com']);
+
+    const after2Successes = adaptiveRate.get_domain_stats('google.com');
+    assertEqual(after2Successes.consecutive_successes, 2, 'Should have 2 successes');
+
+    // Non-rate-limit deferral (mailbox full) should NOT reset success streak
+    adaptiveRate.on_deferred.call(plugin, () => { }, hmail, {
+        err: { message: '452 4.2.2 Mailbox full' },
+        host: 'smtp.google.com'
+    });
+
+    const afterNonRateLimit = adaptiveRate.get_domain_stats('google.com');
+    assertEqual(afterNonRateLimit.consecutive_successes, 2,
+        'Non-rate-limit deferral should NOT reset success streak');
+    assertEqual(afterNonRateLimit.delay_ms, delayAfterFailure,
+        'Delay should NOT change on non-rate-limit deferral');
+
+    // One more success should reach threshold and trigger recovery
+    adaptiveRate.on_delivered.call(plugin, () => { }, hmail, ['smtp.google.com']);
+
+    const afterRecovery = adaptiveRate.get_domain_stats('google.com');
+    assertTrue(afterRecovery.delay_ms < delayAfterFailure,
+        `Delay should decrease after recovery despite intermittent mailbox-full: ${delayAfterFailure} -> ${afterRecovery.delay_ms}`);
+});
+
 test('recovery: rate limit failure resets success streak', () => {
     adaptiveRate.reset_all();
 

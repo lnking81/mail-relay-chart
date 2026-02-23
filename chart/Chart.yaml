@@ -2,8 +2,8 @@ apiVersion: v2
 name: mail-relay
 description: Haraka-based SMTP relay with DKIM signing and DNS automation
 type: application
-version: 3.4.19
-appVersion: "3.4.19"
+version: 3.4.20
+appVersion: "3.4.20"
 keywords:
   - smtp
   - mail
