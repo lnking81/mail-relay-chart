@@ -4,20 +4,20 @@ const fs = require('fs');
 const path = require('path');
 
 // Haraka hook return codes
-// DENYSOFT causes the message to be re-queued for retry (temporary failure)
-// Haraka will retry the message later according to its outbound retry schedule.
-// Our hooks re-evaluate on each retry, so the message is held until the
-// rate-limit window expires.
-let DENYSOFT;
+// DELAY defers the message in-memory without disk rewrite:
+//   send_email_respond calls next_cb() (frees the delivery slot),
+//   then temp_fail_queue.add(filename, delay_seconds * 1000, cb)
+//   which pushes hmail back to delivery_queue after the timer fires.
+// Crucially, DELAY does NOT call temp_fail() and therefore does NOT
+// trigger the 'deferred' hook — no self-feedback loop.
+// Source: haraka-constants/index.js → exports.delay = 908
+// Source: Haraka/outbound/hmail.js → send_email_respond()
+let DELAY;
 try {
-    DENYSOFT = require('haraka-constants').denysoft;
+    DELAY = require('haraka-constants').delay;
 } catch (e) {
-    DENYSOFT = 903; // Known numeric value
+    DELAY = 908; // Known numeric value
 }
-
-// Marker prefix for internal adaptive deferrals (DENYSOFT from send_email)
-// These must NOT be treated as remote provider deferrals in on_deferred.
-const INTERNAL_DEFER_PREFIX = 'ADAPTIVE_RATE_INTERNAL:';
 
 /**
  * Haraka Adaptive Rate Limiting Plugin
@@ -26,7 +26,9 @@ const INTERNAL_DEFER_PREFIX = 'ADAPTIVE_RATE_INTERNAL:';
  * When receiving 421 (rate limited) or 4xx errors, the plugin slows down.
  * When deliveries succeed, it gradually speeds up.
  *
- * Uses send_email hook with DELAY to actually throttle delivery.
+ * Uses send_email hook with next(DELAY, seconds) to throttle delivery.
+ * DELAY is a native Haraka constant (908) that defers the message in-memory
+ * without triggering the deferred hook (no self-feedback loop).
  *
  * MX PROVIDER NORMALIZATION:
  * Rate limiting is done per MX provider, not per recipient domain.
@@ -73,15 +75,17 @@ const INTERNAL_DEFER_PREFIX = 'ADAPTIVE_RATE_INTERNAL:';
  * - On deferred without rate limit (450, 451, 452, etc.): no delay increase
  *   (these are typically recipient-specific, not provider-wide)
  * - On delivered: delay decreases after threshold successes (recovery)
- * - On send_email: block/delay delivery using DENYSOFT (requeue) or setTimeout
+ * - On send_email: defer delivery using next(DELAY, seconds)
  *
  * THROTTLING MECHANISM:
- * All blocking uses DENYSOFT to requeue the message back to Haraka's retry queue.
- * On each retry attempt, our send_email hook re-evaluates the rate-limit state:
- * - If still within a pause window → DENYSOFT again
- * - If pause expired → allow delivery
- * This avoids holding outbound slots (setTimeout thundering herd problem)
- * and lets Haraka's retry scheduler spread retries naturally.
+ * All blocking uses DELAY (Haraka constant 908) in the send_email hook.
+ * next(DELAY, N) calls next_cb() to free the delivery slot, then schedules
+ * the message to be re-pushed to delivery_queue after N seconds.
+ * On each re-delivery attempt, our send_email hook re-evaluates the state:
+ * - If still within a pause window → DELAY again
+ * - If pause expired → next() to proceed with delivery
+ * DELAY does NOT trigger the 'deferred' hook (unlike DENYSOFT), so there is
+ * no self-feedback loop. It also does NOT rewrite the queue file to disk.
  *
  * CIRCUIT BREAKER:
  * When consecutive rate-limit failures reach threshold, the "circuit opens":
@@ -877,17 +881,18 @@ exports.on_send_email = function (next, hmail) {
     const now = Date.now();
 
     // CIRCUIT BREAKER CHECK
-    // If circuit is open, BLOCK ALL sends via DENYSOFT (requeue for retry)
+    // If circuit is open, DELAY for remaining time
     if (state.circuitOpenUntil > now) {
-        const remainingPause = state.circuitOpenUntil - now;
-        plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - DENYSOFT requeue (closes at ${new Date(state.circuitOpenUntil).toISOString()}, ${Math.ceil(remainingPause / 1000)}s remaining)`);
+        const remainingMs = state.circuitOpenUntil - now;
+        const delaySec = Math.ceil(remainingMs / 1000);
+        plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - DELAY ${delaySec}s (closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
 
         // Record metric: delay applied (due to circuit breaker)
         if (metricsInitialized && metrics.delaysAppliedCounter) {
             try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
 
-        return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} circuit breaker open for ${mxProvider}, retry after ${new Date(state.circuitOpenUntil).toISOString()}`);
+        return next(DELAY, delaySec);
     }
 
     // Circuit was open but now closed - gradual recovery, NOT full reset
@@ -903,15 +908,16 @@ exports.on_send_email = function (next, hmail) {
     // IMMEDIATE PAUSE CHECK (softer than circuit breaker, set on each rate limit)
     // This ensures immediate throttling even before circuit breaker threshold is reached
     if (state.noSendUntil > now) {
-        const remainingPause = state.noSendUntil - now;
+        const remainingMs = state.noSendUntil - now;
+        const delaySec = Math.ceil(remainingMs / 1000);
 
         // Record metric: delay applied
         if (metricsInitialized && metrics.delaysAppliedCounter) {
             try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
 
-        plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingPause / 1000)}s remaining, streak: ${state.consecutiveRateLimitFailures})`);
-        return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} rate limit backoff for ${mxProvider}, retry after ${new Date(state.noSendUntil).toISOString()}`);
+        plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - DELAY ${delaySec}s (streak: ${state.consecutiveRateLimitFailures})`);
+        return next(DELAY, delaySec);
     }
 
     // Calculate time since last send
@@ -928,6 +934,8 @@ exports.on_send_email = function (next, hmail) {
         const remainingDelay = targetInterval - timeSinceLastSend;
 
         if (remainingDelay > 0) {
+            const delaySec = Math.ceil(remainingDelay / 1000);
+
             // Record metric: delay applied
             if (metricsInitialized && metrics.delaysAppliedCounter) {
                 try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
@@ -939,8 +947,8 @@ exports.on_send_email = function (next, hmail) {
                 try { metrics.baselineThrottledCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
             }
 
-            plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingDelay / 1000)}s until next allowed send, streak: ${state.consecutiveRateLimitFailures})`);
-            return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} ${mode} for ${mxProvider}`);
+            plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - DELAY ${delaySec}s (streak: ${state.consecutiveRateLimitFailures})`);
+            return next(DELAY, delaySec);
         }
     }
 
@@ -1080,12 +1088,9 @@ exports.on_deferred = function (next, hmail, params) {
     // Log all deferred events at info level - they're important for troubleshooting
     plugin.loginfo(`Adaptive rate: ${mxProvider} deferred - ${errMsg.substring(0, 100)}`);
 
-    // Ignore plugin's own internal DENYSOFT requeues from send_email.
-    // These are local scheduling deferrals, not remote MX responses.
-    if (errMsg.startsWith(INTERNAL_DEFER_PREFIX)) {
-        plugin.logdebug(`Adaptive rate: ${mxProvider} internal defer ignored - ${errMsg.substring(0, 100)}`);
-        return next();
-    }
+    // Note: DELAY responses from send_email do NOT trigger the deferred hook
+    // (Haraka routes them to temp_fail_queue internally), so all events here
+    // are genuine remote MX deferrals.
 
     const state = getState(mxProvider);
     const cfg = getDomainConfig(mxProvider);

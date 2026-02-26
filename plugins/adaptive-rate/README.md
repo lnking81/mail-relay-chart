@@ -12,19 +12,21 @@ Automatically adjusts outbound mail delivery rate based on remote server respons
 - **On other 4xx errors (450, 452, etc.)**: Tracked for monitoring, but does **not** affect delay or block recovery
 - **On successful delivery**: Gradually decreases delay after threshold consecutive successes (gradual recovery)
 - **Per-MX-provider tracking**: Rate limiting is per MX provider, not recipient domain
-- **Throttling via DENYSOFT**: Messages are requeued to Haraka's retry queue (no slot hogging)
+- **Throttling via DELAY**: Messages are deferred to Haraka's `temp_fail_queue` with precise delay (no slot hogging)
 - **Circuit Breaker**: After consecutive rate-limit failures, completely pause sends; extends on continued failures
 
 ## Throttling Mechanism
 
-All rate-limit enforcement uses **DENYSOFT** (Haraka constant 903), which requeues the message back to Haraka's outbound retry queue. On each retry attempt, the `send_email` hook re-evaluates the current state:
+All rate-limit enforcement uses **DELAY** (Haraka constant 908) via `next(DELAY, delay_seconds)` in the `send_email` hook. Haraka routes DELAY responses to an in-memory `temp_fail_queue`, calls `next_cb()` to free the delivery slot, and re-enqueues the message after the specified delay. Critically, DELAY does **not** call `temp_fail()` and does **not** trigger the `deferred` hook — eliminating self-feedback loops.
 
-- If circuit breaker is open → DENYSOFT (requeue)
-- If `noSendUntil` pause is active → DENYSOFT (requeue)
-- If `lastSendTime` interval hasn't elapsed → DENYSOFT (requeue)
+On each send attempt, the `send_email` hook re-evaluates the current state:
+
+- If circuit breaker is open → `next(DELAY, seconds)` (defer)
+- If `noSendUntil` pause is active → `next(DELAY, seconds)` (defer)
+- If `lastSendTime` interval hasn't elapsed → `next(DELAY, seconds)` (defer)
 - Otherwise → allow delivery (`next()`)
 
-This approach avoids the **thundering herd problem**: if 100 messages were held via `setTimeout`, they would all fire simultaneously after the delay expires, causing a burst that triggers another rate limit. With DENYSOFT, Haraka's retry scheduler naturally spreads retries over time.
+This approach avoids the **thundering herd problem**: if 100 messages were held via `setTimeout`, they would all fire simultaneously after the delay expires, causing a burst that triggers another rate limit. With DELAY, Haraka's `temp_fail_queue` naturally re-enqueues messages after the precise delay.
 
 ## Algorithm
 
@@ -66,18 +68,18 @@ On DELIVERED:
 
 On SEND_EMAIL (before delivery attempt):
   1. Circuit breaker check:
-     If circuitOpenUntil > now → DENYSOFT (requeue)
+     If circuitOpenUntil > now → DELAY N seconds (defer)
 
   2. Circuit expired cleanup:
      If circuitOpenUntil expired → clear flags, keep delay (gradual recovery)
 
   3. Immediate pause check:
-     If noSendUntil > now → DENYSOFT (requeue)
+     If noSendUntil > now → DELAY N seconds (defer)
 
   4. Inter-send interval check:
      If consecutiveRateLimitFailures > 0 AND delay > min_delay:
        remainingDelay = delay - (now - lastSendTime)
-       If remainingDelay > 0 → DENYSOFT (requeue)
+       If remainingDelay > 0 → DELAY N seconds (defer)
 
   5. Allow delivery → next()
 ```
@@ -120,7 +122,7 @@ When you reach `maxDelay` (e.g., 5 minutes) but the provider keeps rate-limiting
 | Phase               | Condition                                   | Behavior                                             |
 | ------------------- | ------------------------------------------- | ---------------------------------------------------- |
 | **Closed** (normal) | `consecutiveRateLimitFailures < threshold`  | Normal exponential backoff + immediate pause         |
-| **Open** (tripped)  | `consecutiveRateLimitFailures >= threshold` | ALL sends DENYSOFT for `circuitBreakerDuration`      |
+| **Open** (tripped)  | `consecutiveRateLimitFailures >= threshold` | ALL sends DELAY for `circuitBreakerDuration`         |
 | **Extended**        | New rate-limits while circuit is open       | Duration extended (in-flight messages still failing) |
 | **Recovery**        | Circuit duration expires                    | Circuit closes, delay preserved, gradual recovery    |
 
@@ -139,7 +141,7 @@ google.com: delay = 300000ms (maxDelay reached)
 → Message deferred: 421 Rate limited (streak #3)
 → Message deferred: 421 Rate limited (streak #4)
 → Message deferred: 421 Rate limited (streak #5 = threshold)
-→ CIRCUIT BREAKER OPENS: All sends to google.com → DENYSOFT for 2 min
+→ CIRCUIT BREAKER OPENS: All sends to google.com → DELAY for 2 min
 → In-flight message fails: 421 Rate limited (streak #6)
 → Circuit EXTENDED by another 2 min
 → Eventually: circuit expires, delay still 300000ms
@@ -249,7 +251,7 @@ google.com: delay = 20000ms (initialDelay for gmail config)
   noSendUntil: now + 40000ms
   streak: 1
 
-→ Next 40 seconds: all sends to google.com → DENYSOFT (requeued)
+→ Next 40 seconds: all sends to google.com → DELAY (deferred)
 
 → After pause expires, deliver message: Success!
   consecutiveSuccesses: 1/10
@@ -271,7 +273,7 @@ google.com: delay = 20000ms (initialDelay for gmail config)
 ```
 google.com: delay = 300000ms (maxDelay), streak = 4
 → Message deferred: 421 Rate limited (streak #5 = threshold!)
-→ CIRCUIT BREAKER OPENS (all sends → DENYSOFT)
+→ CIRCUIT BREAKER OPENS (all sends → DELAY)
 → In-flight message succeeds → counted but circuit NOT closed
 → In-flight message fails: 421 → circuit EXTENDED
 → Circuit eventually expires
@@ -312,7 +314,7 @@ When `prom-client` is available, the plugin exports metrics on a dedicated HTTP 
 | `haraka_adaptive_rate_deliveries_total{domain}`                             | Counter | Total delivered messages                         |
 | `haraka_adaptive_rate_deferrals_total{domain}`                              | Counter | Total deferred messages (all types)              |
 | `haraka_adaptive_rate_bounces_total{domain}`                                | Counter | Total bounced messages (permanent failures)      |
-| `haraka_adaptive_rate_delays_applied_total{domain}`                         | Counter | Times DENYSOFT was returned (throttle applied)   |
+| `haraka_adaptive_rate_delays_applied_total{domain}`                         | Counter | Times DELAY was returned (throttle applied)      |
 | `haraka_adaptive_rate_baseline_throttled_total{domain}`                     | Counter | Preemptive minDelay throttles before rate limits |
 | `haraka_adaptive_rate_rate_limited_total{domain}`                           | Counter | Explicit rate limit responses (421, 4.7.28)      |
 | `haraka_adaptive_rate_circuit_breaker_trips_total{domain}`                  | Counter | Total circuit breaker activations                |

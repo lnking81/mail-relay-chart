@@ -803,7 +803,7 @@ test('circuit breaker: opens after threshold failures', () => {
     assertTrue(stats.circuit_breaker_remaining_ms > 0, 'Should have remaining circuit time');
 });
 
-test('circuit breaker: blocks all sends when open (DENYSOFT)', () => {
+test('circuit breaker: blocks all sends when open (DELAY)', () => {
     // Continue from previous test - circuit should still be open
     const hmail = createMockHmail('gmail.com', 'smtp.google.com');
 
@@ -817,10 +817,9 @@ test('circuit breaker: blocks all sends when open (DENYSOFT)', () => {
 
     adaptiveRate.on_send_email.call(plugin, next, hmail);
 
-    // DENYSOFT = 903 (haraka-constants)
-    assertEqual(returnCode, 903, `Should return DENYSOFT (903) when circuit is open, got ${returnCode}`);
-    assertTrue(returnMsg && returnMsg.length > 0, 'Should have a reason message');
-    assertTrue(returnMsg.includes('google.com'), 'Reason should mention the provider');
+    // DELAY = 908 (haraka-constants)
+    assertEqual(returnCode, 908, `Should return DELAY (908) when circuit is open, got ${returnCode}`);
+    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'Should have a numeric delay in seconds');
 });
 
 test('circuit breaker: does NOT close on successful delivery while open (race condition fix)', () => {
@@ -969,7 +968,7 @@ test('circuit breaker: close_circuit admin function works', () => {
     assertFalse(stats.circuit_breaker_open, 'Circuit should be closed after admin close');
 });
 
-test('throttle: short delay uses DENYSOFT (no setTimeout thundering herd)', () => {
+test('throttle: short delay uses DELAY (native Haraka temp_fail_queue)', () => {
     adaptiveRate.reset_all();
 
     // Use outlook.com (default config: initialDelay=5000)
@@ -987,14 +986,16 @@ test('throttle: short delay uses DENYSOFT (no setTimeout thundering herd)', () =
     const stats = adaptiveRate.get_domain_stats('outlook.com');
     assertTrue(stats.paused, 'Should be paused after rate limit');
 
-    // Even short delays should use DENYSOFT (not setTimeout)
+    // All delays use DELAY (routes to Haraka temp_fail_queue, not setTimeout)
     let returnCode = null;
-    adaptiveRate.on_send_email.call(plugin, (code) => { returnCode = code; }, hmail);
+    let returnMsg = null;
+    adaptiveRate.on_send_email.call(plugin, (code, msg) => { returnCode = code; returnMsg = msg; }, hmail);
 
-    assertEqual(returnCode, 903, `Should return DENYSOFT (903) even for short delay, got ${returnCode}`);
+    assertEqual(returnCode, 908, `Should return DELAY (908) even for short delay, got ${returnCode}`);
+    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
 });
 
-test('throttle: long noSendUntil uses DENYSOFT', () => {
+test('throttle: long noSendUntil uses DELAY', () => {
     adaptiveRate.reset_all();
 
     // Use gmail.com with override: initialDelay=20000, backoff=2.0
@@ -1012,15 +1013,17 @@ test('throttle: long noSendUntil uses DENYSOFT', () => {
     const stats = adaptiveRate.get_domain_stats('google.com');
     assertTrue(stats.paused, 'Should be paused after rate limit');
 
-    // noSendUntil is set to now + delay (40000ms), which is > 30s
-    // So send_email should return DENYSOFT
+    // noSendUntil is set to now + delay (40000ms)
+    // send_email should return DELAY with seconds
     let returnCode = null;
-    adaptiveRate.on_send_email.call(plugin, (code) => { returnCode = code; }, hmail);
+    let returnMsg = null;
+    adaptiveRate.on_send_email.call(plugin, (code, msg) => { returnCode = code; returnMsg = msg; }, hmail);
 
-    assertEqual(returnCode, 903, `Should return DENYSOFT (903) for long pause, got ${returnCode}`);
+    assertEqual(returnCode, 908, `Should return DELAY (908) for long pause, got ${returnCode}`);
+    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
 });
 
-test('throttle: minimum interval between sends uses DENYSOFT', () => {
+test('throttle: minimum interval between sends uses DELAY', () => {
     adaptiveRate.reset_all();
 
     // Use outlook.com (default config: initialDelay=5000, backoff=1.5)
@@ -1033,18 +1036,17 @@ test('throttle: minimum interval between sends uses DENYSOFT', () => {
         host: 'smtp.outlook.com'
     });
 
-    // Expire the noSendUntil pause (simulate time passing)
-    const state = adaptiveRate.get_domain_stats('outlook.com');
-    // We can't directly modify internal state, but the second send_email
-    // first hits noSendUntil check, then falls to lastSendTime check
-    // Let's just verify that any blocking returns DENYSOFT
+    // Second send_email hits noSendUntil or interval check
+    // All throttling uses DELAY with numeric seconds
     let returnCode = null;
-    adaptiveRate.on_send_email.call(plugin, (code) => { returnCode = code; }, hmail);
+    let returnMsg = null;
+    adaptiveRate.on_send_email.call(plugin, (code, msg) => { returnCode = code; returnMsg = msg; }, hmail);
 
-    assertEqual(returnCode, 903, `All throttling should use DENYSOFT (903), got ${returnCode}`);
+    assertEqual(returnCode, 908, `All throttling should use DELAY (908), got ${returnCode}`);
+    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
 });
 
-test('throttle: internal DENYSOFT is not treated as remote rate limit', () => {
+test('throttle: DELAY does not trigger deferred hook (no self-feedback)', () => {
     adaptiveRate.reset_all();
 
     const hmail = createMockHmail('gmail.com', 'smtp.google.com');
@@ -1059,27 +1061,26 @@ test('throttle: internal DENYSOFT is not treated as remote rate limit', () => {
     const before = adaptiveRate.get_domain_stats('google.com');
     assertEqual(before.total_rate_limited, 1, 'Precondition: should have one real rate-limit event');
 
-    // Plugin throttling returns internal DENYSOFT message
-    let returnMsg = '';
-    adaptiveRate.on_send_email.call(plugin, (_code, msg) => {
-        returnMsg = msg || '';
+    // Plugin throttling now returns DELAY (908) with numeric seconds.
+    // Haraka routes DELAY to temp_fail_queue internally and does NOT
+    // call temp_fail() → does NOT trigger deferred hook.
+    // Self-feedback is impossible by design.
+    let returnCode = null;
+    let returnMsg = null;
+    adaptiveRate.on_send_email.call(plugin, (code, msg) => {
+        returnCode = code;
+        returnMsg = msg;
     }, hmail);
 
-    assertTrue(returnMsg.includes('ADAPTIVE_RATE_INTERNAL:'), 'Internal throttling reason should be marked');
+    assertEqual(returnCode, 908, `Should return DELAY (908), got ${returnCode}`);
+    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
 
-    // Simulate Haraka deferred hook receiving that internal DENYSOFT text
-    adaptiveRate.on_deferred.call(plugin, () => { }, hmail, {
-        err: { message: returnMsg },
-        host: 'smtp.google.com'
-    });
-
+    // Verify counters haven't changed (DELAY doesn't reach on_deferred)
     const after = adaptiveRate.get_domain_stats('google.com');
     assertEqual(after.total_rate_limited, before.total_rate_limited,
-        'Internal defer must NOT increment total_rate_limited');
+        'DELAY must NOT increment total_rate_limited');
     assertEqual(after.consecutive_rate_limit_failures, before.consecutive_rate_limit_failures,
-        'Internal defer must NOT increase rate-limit streak');
-    assertEqual(after.total_deferred, before.total_deferred,
-        'Internal defer must NOT increment provider deferred counter');
+        'DELAY must NOT increase rate-limit streak');
 });
 
 // --- Admin Functions Tests ---
