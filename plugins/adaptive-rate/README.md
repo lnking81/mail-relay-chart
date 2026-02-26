@@ -302,18 +302,19 @@ google.com: delay = 15000ms, successStreak = 3/5
 
 When `prom-client` is available, the plugin exports metrics on a dedicated HTTP server (default port 8081):
 
-| Metric                                                         | Type    | Description                                    |
-| -------------------------------------------------------------- | ------- | ---------------------------------------------- |
-| `haraka_adaptive_rate_delay_ms{domain}`                        | Gauge   | Current delay in milliseconds                  |
-| `haraka_adaptive_rate_consecutive_failures{domain}`            | Gauge   | All deferred errors (monitoring only)          |
-| `haraka_adaptive_rate_consecutive_rate_limit_failures{domain}` | Gauge   | Rate limit errors only (controls delay)        |
-| `haraka_adaptive_rate_circuit_breaker_open{domain}`            | Gauge   | Circuit breaker state (1=open, 0=closed)       |
-| `haraka_adaptive_rate_deliveries_total{domain}`                | Counter | Total delivered messages                       |
-| `haraka_adaptive_rate_deferrals_total{domain}`                 | Counter | Total deferred messages (all types)            |
-| `haraka_adaptive_rate_bounces_total{domain}`                   | Counter | Total bounced messages (permanent failures)    |
-| `haraka_adaptive_rate_delays_applied_total{domain}`            | Counter | Times DENYSOFT was returned (throttle applied) |
-| `haraka_adaptive_rate_rate_limited_total{domain}`              | Counter | Explicit rate limit responses (421, 4.7.28)    |
-| `haraka_adaptive_rate_circuit_breaker_trips_total{domain}`     | Counter | Total circuit breaker activations              |
+| Metric                                                                      | Type    | Description                                      |
+| --------------------------------------------------------------------------- | ------- | ------------------------------------------------ |
+| `haraka_adaptive_rate_delay_ms{domain}`                                     | Gauge   | Current delay in milliseconds                    |
+| `haraka_adaptive_rate_consecutive_failures{domain}`                         | Gauge   | All deferred errors (monitoring only)            |
+| `haraka_adaptive_rate_consecutive_rate_limit_failures{domain}`              | Gauge   | Rate limit errors only (controls delay)          |
+| `haraka_adaptive_rate_circuit_breaker_open{domain}`                         | Gauge   | Circuit breaker state (1=open, 0=closed)         |
+| `haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{domain}` | Gauge   | Unix timestamp when circuit closes (0 if closed) |
+| `haraka_adaptive_rate_deliveries_total{domain}`                             | Counter | Total delivered messages                         |
+| `haraka_adaptive_rate_deferrals_total{domain}`                              | Counter | Total deferred messages (all types)              |
+| `haraka_adaptive_rate_bounces_total{domain}`                                | Counter | Total bounced messages (permanent failures)      |
+| `haraka_adaptive_rate_delays_applied_total{domain}`                         | Counter | Times DENYSOFT was returned (throttle applied)   |
+| `haraka_adaptive_rate_rate_limited_total{domain}`                           | Counter | Explicit rate limit responses (421, 4.7.28)      |
+| `haraka_adaptive_rate_circuit_breaker_trips_total{domain}`                  | Counter | Total circuit breaker activations                |
 
 > Note: The `domain` label contains the MX provider name (e.g., `google.com`), not the recipient domain.
 

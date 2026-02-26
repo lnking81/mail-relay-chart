@@ -491,7 +491,7 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "count(haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"} > 5000) or vector(0)",
+            "expr": "count(max by (domain) (haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"}) > 5000) or vector(0)",
             "legendFormat": "Throttled Domains",
             "refId": "A"
           }],
@@ -527,7 +527,7 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "count(haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0) or vector(0)",
+            "expr": "count(max by (domain) (haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"}) > 0) or vector(0)",
             "legendFormat": "Active Rate Limits",
             "refId": "A"
           }],
@@ -599,7 +599,7 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "count(haraka_adaptive_rate_circuit_breaker_open{namespace=~\"$namespace\", release=~\"$release\"} == 1) or vector(0)",
+            "expr": "count(max by (domain) (haraka_adaptive_rate_circuit_breaker_open{namespace=~\"$namespace\", release=~\"$release\"}) == 1) or vector(0)",
             "legendFormat": "Open Circuits",
             "refId": "A"
           }],
@@ -671,6 +671,13 @@ data:
                   { "id": "custom.width", "value": 200 },
                   { "id": "custom.cellOptions", "value": { "type": "auto" } }
                 ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Closes At" },
+                "properties": [
+                  { "id": "unit", "value": "dateTimeAsIso" },
+                  { "id": "custom.width", "value": 220 }
+                ]
               }
             ]
           },
@@ -685,7 +692,7 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"} > 5000",
+            "expr": "max by (domain) (haraka_adaptive_rate_delay_ms{namespace=~\"$namespace\", release=~\"$release\"}) > 5000",
             "format": "table",
             "instant": true,
             "legendFormat": "__auto",
@@ -746,7 +753,7 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"} > 0",
+            "expr": "max by (domain) (haraka_adaptive_rate_consecutive_rate_limit_failures{namespace=~\"$namespace\", release=~\"$release\"}) > 0",
             "format": "table",
             "instant": true,
             "legendFormat": "__auto",
@@ -866,20 +873,31 @@ data:
           "pluginVersion": "10.0.0",
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "haraka_adaptive_rate_circuit_breaker_open{namespace=~\"$namespace\", release=~\"$release\"} == 1",
+            "expr": "max by (domain) (haraka_adaptive_rate_circuit_breaker_open{namespace=~\"$namespace\", release=~\"$release\"}) == 1",
             "format": "table",
             "instant": true,
             "legendFormat": "__auto",
             "refId": "A"
+          }, {
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "max by (domain) (haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{namespace=~\"$namespace\", release=~\"$release\"})",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "__auto",
+            "refId": "B"
           }],
           "title": "Open Circuits by Domain",
           "transformations": [
             {
+              "id": "joinByField",
+              "options": { "byField": "domain", "mode": "inner" }
+            },
+            {
               "id": "organize",
               "options": {
-                "excludeByName": { "Time": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true, "container": true, "endpoint": true, "hostname": true, "pod": true, "service": true, "Value": true },
+                "excludeByName": { "Time": true, "Time 1": true, "Time 2": true, "job": true, "instance": true, "namespace": true, "release": true, "plugin": true, "__name__": true, "container": true, "endpoint": true, "hostname": true, "pod": true, "service": true, "Value": true },
                 "indexByName": {},
-                "renameByName": { "domain": "Domain" }
+                "renameByName": { "domain": "Domain", "Value #B": "Closes At" }
               }
             }
           ],

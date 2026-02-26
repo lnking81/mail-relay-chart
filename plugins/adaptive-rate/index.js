@@ -15,6 +15,10 @@ try {
     DENYSOFT = 903; // Known numeric value
 }
 
+// Marker prefix for internal adaptive deferrals (DENYSOFT from send_email)
+// These must NOT be treated as remote provider deferrals in on_deferred.
+const INTERNAL_DEFER_PREFIX = 'ADAPTIVE_RATE_INTERNAL:';
+
 /**
  * Haraka Adaptive Rate Limiting Plugin
  *
@@ -52,6 +56,7 @@ try {
  * - haraka_adaptive_rate_consecutive_failures{domain} - all deferred errors count
  * - haraka_adaptive_rate_consecutive_rate_limit_failures{domain} - rate limit errors only (controls delay)
  * - haraka_adaptive_rate_circuit_breaker_open{domain} - 1 if circuit is open, 0 otherwise
+ * - haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{domain} - Unix timestamp when circuit closes (0 if closed)
  * - haraka_adaptive_rate_deliveries_total{domain} - total delivered messages
  * - haraka_adaptive_rate_deferrals_total{domain} - total deferred messages
  * - haraka_adaptive_rate_bounces_total{domain} - total bounced messages
@@ -125,6 +130,7 @@ let metrics = {
     failuresGauge: null,
     rateLimitFailuresGauge: null,  // Rate limit specific failures
     circuitBreakerGauge: null,     // Circuit breaker state (0=closed, 1=open)
+    circuitOpenUntilGauge: null,   // Circuit breaker close time (Unix timestamp, seconds)
     deliveriesCounter: null,
     deferralsCounter: null,
     bouncesCounter: null,
@@ -246,6 +252,14 @@ function initMetrics(plugin) {
         metrics.circuitBreakerGauge = new client.Gauge({
             name: prefix + 'circuit_breaker_open',
             help: 'Circuit breaker state: 1=open (paused), 0=closed (normal)',
+            labelNames: ['domain'],
+            registers: [metricsRegistry]
+        });
+
+        // Circuit breaker close time (Gauge) - Unix timestamp in seconds, 0 if closed
+        metrics.circuitOpenUntilGauge = new client.Gauge({
+            name: prefix + 'circuit_breaker_open_until_timestamp_seconds',
+            help: 'Unix timestamp when circuit breaker closes, 0 if circuit is closed',
             labelNames: ['domain'],
             registers: [metricsRegistry]
         });
@@ -379,6 +393,8 @@ function updateMetrics(domain, state) {
         // Circuit breaker: 1 if open (future timestamp), 0 if closed
         const isCircuitOpen = state.circuitOpenUntil > Date.now() ? 1 : 0;
         metrics.circuitBreakerGauge.set({ domain }, isCircuitOpen);
+        const circuitOpenUntilTs = isCircuitOpen ? Math.floor(state.circuitOpenUntil / 1000) : 0;
+        metrics.circuitOpenUntilGauge.set({ domain }, circuitOpenUntilTs);
     } catch (err) {
         // Ignore metric errors
     }
@@ -861,7 +877,7 @@ exports.on_send_email = function (next, hmail) {
             try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
 
-        return next(DENYSOFT, `Circuit breaker open for ${mxProvider}, retry after ${new Date(state.circuitOpenUntil).toISOString()}`);
+        return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} circuit breaker open for ${mxProvider}, retry after ${new Date(state.circuitOpenUntil).toISOString()}`);
     }
 
     // Circuit was open but now closed - gradual recovery, NOT full reset
@@ -885,7 +901,7 @@ exports.on_send_email = function (next, hmail) {
         }
 
         plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingPause / 1000)}s remaining, streak: ${state.consecutiveRateLimitFailures})`);
-        return next(DENYSOFT, `Rate limit backoff for ${mxProvider}, retry after ${new Date(state.noSendUntil).toISOString()}`);
+        return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} rate limit backoff for ${mxProvider}, retry after ${new Date(state.noSendUntil).toISOString()}`);
     }
 
     // Calculate time since last send
@@ -904,7 +920,7 @@ exports.on_send_email = function (next, hmail) {
             }
 
             plugin.loginfo(`Adaptive rate: Throttling ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingDelay / 1000)}s until next allowed send, streak: ${state.consecutiveRateLimitFailures})`);
-            return next(DENYSOFT, `Rate limit throttle for ${mxProvider}`);
+            return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} rate limit throttle for ${mxProvider}`);
         }
     }
 
@@ -1043,6 +1059,13 @@ exports.on_deferred = function (next, hmail, params) {
 
     // Log all deferred events at info level - they're important for troubleshooting
     plugin.loginfo(`Adaptive rate: ${mxProvider} deferred - ${errMsg.substring(0, 100)}`);
+
+    // Ignore plugin's own internal DENYSOFT requeues from send_email.
+    // These are local scheduling deferrals, not remote MX responses.
+    if (errMsg.startsWith(INTERNAL_DEFER_PREFIX)) {
+        plugin.logdebug(`Adaptive rate: ${mxProvider} internal defer ignored - ${errMsg.substring(0, 100)}`);
+        return next();
+    }
 
     const state = getState(mxProvider);
     const cfg = getDomainConfig(mxProvider);

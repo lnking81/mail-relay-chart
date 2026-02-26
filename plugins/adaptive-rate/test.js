@@ -1044,6 +1044,44 @@ test('throttle: minimum interval between sends uses DENYSOFT', () => {
     assertEqual(returnCode, 903, `All throttling should use DENYSOFT (903), got ${returnCode}`);
 });
 
+test('throttle: internal DENYSOFT is not treated as remote rate limit', () => {
+    adaptiveRate.reset_all();
+
+    const hmail = createMockHmail('gmail.com', 'smtp.google.com');
+
+    // Initialize and create one REAL provider rate-limit event
+    adaptiveRate.on_send_email.call(plugin, () => { }, hmail);
+    adaptiveRate.on_deferred.call(plugin, () => { }, hmail, {
+        err: { message: '421 Rate limited' },
+        host: 'smtp.google.com'
+    });
+
+    const before = adaptiveRate.get_domain_stats('google.com');
+    assertEqual(before.total_rate_limited, 1, 'Precondition: should have one real rate-limit event');
+
+    // Plugin throttling returns internal DENYSOFT message
+    let returnMsg = '';
+    adaptiveRate.on_send_email.call(plugin, (_code, msg) => {
+        returnMsg = msg || '';
+    }, hmail);
+
+    assertTrue(returnMsg.includes('ADAPTIVE_RATE_INTERNAL:'), 'Internal throttling reason should be marked');
+
+    // Simulate Haraka deferred hook receiving that internal DENYSOFT text
+    adaptiveRate.on_deferred.call(plugin, () => { }, hmail, {
+        err: { message: returnMsg },
+        host: 'smtp.google.com'
+    });
+
+    const after = adaptiveRate.get_domain_stats('google.com');
+    assertEqual(after.total_rate_limited, before.total_rate_limited,
+        'Internal defer must NOT increment total_rate_limited');
+    assertEqual(after.consecutive_rate_limit_failures, before.consecutive_rate_limit_failures,
+        'Internal defer must NOT increase rate-limit streak');
+    assertEqual(after.total_deferred, before.total_deferred,
+        'Internal defer must NOT increment provider deferred counter');
+});
+
 // --- Admin Functions Tests ---
 console.log(`\n${YELLOW}Admin Functions${RESET}`);
 
