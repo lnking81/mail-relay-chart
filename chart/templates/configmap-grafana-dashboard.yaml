@@ -478,7 +478,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 24 },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 24 },
           "id": 46,
           "options": {
             "colorMode": "value",
@@ -514,7 +514,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 24 },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 24 },
           "id": 47,
           "options": {
             "colorMode": "value",
@@ -551,7 +551,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 4, "w": 5, "x": 10, "y": 24 },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 24 },
           "id": 48,
           "options": {
             "colorMode": "value",
@@ -586,7 +586,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 4, "w": 5, "x": 15, "y": 24 },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 24 },
           "id": 49,
           "options": {
             "colorMode": "value",
@@ -623,7 +623,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 24 },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 24 },
           "id": 95,
           "options": {
             "colorMode": "value",
@@ -641,6 +641,43 @@ data:
             "refId": "A"
           }],
           "title": "CB Trips (1h)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Preemptive baseline throttles (minDelay) in the last hour",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 10 },
+                { "color": "red", "value": 100 }
+              ]},
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 24 },
+          "id": 99,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "expr": "sum(increase(haraka_adaptive_rate_baseline_throttled_total{namespace=~\"$namespace\", release=~\"$release\"}[1h])) or vector(0)",
+            "legendFormat": "Baseline Throttles (1h)",
+            "refId": "A"
+          }],
+          "title": "Baseline Throttles (1h)",
           "type": "stat"
         },
         {

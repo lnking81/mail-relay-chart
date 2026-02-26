@@ -313,6 +313,7 @@ When `prom-client` is available, the plugin exports metrics on a dedicated HTTP 
 | `haraka_adaptive_rate_deferrals_total{domain}`                              | Counter | Total deferred messages (all types)              |
 | `haraka_adaptive_rate_bounces_total{domain}`                                | Counter | Total bounced messages (permanent failures)      |
 | `haraka_adaptive_rate_delays_applied_total{domain}`                         | Counter | Times DENYSOFT was returned (throttle applied)   |
+| `haraka_adaptive_rate_baseline_throttled_total{domain}`                     | Counter | Preemptive minDelay throttles before rate limits |
 | `haraka_adaptive_rate_rate_limited_total{domain}`                           | Counter | Explicit rate limit responses (421, 4.7.28)      |
 | `haraka_adaptive_rate_circuit_breaker_trips_total{domain}`                  | Counter | Total circuit breaker activations                |
 
@@ -332,6 +333,9 @@ haraka_adaptive_rate_circuit_breaker_open == 1
 
 # Rate limit responses per hour
 sum(increase(haraka_adaptive_rate_rate_limited_total[1h])) by (domain)
+
+# Baseline throttles per hour (preemptive pacing)
+sum(increase(haraka_adaptive_rate_baseline_throttled_total[1h])) by (domain)
 
 # Circuit breaker trips in the last hour
 sum(increase(haraka_adaptive_rate_circuit_breaker_trips_total[1h])) by (domain)

@@ -61,6 +61,7 @@ const INTERNAL_DEFER_PREFIX = 'ADAPTIVE_RATE_INTERNAL:';
  * - haraka_adaptive_rate_deferrals_total{domain} - total deferred messages
  * - haraka_adaptive_rate_bounces_total{domain} - total bounced messages
  * - haraka_adaptive_rate_delays_applied_total{domain} - times delay was applied
+ * - haraka_adaptive_rate_baseline_throttled_total{domain} - times baseline minDelay throttling was applied
  * - haraka_adaptive_rate_rate_limited_total{domain} - explicit rate limit responses (421)
  * - haraka_adaptive_rate_circuit_breaker_trips_total{domain} - times circuit breaker tripped
  *
@@ -135,6 +136,7 @@ let metrics = {
     deferralsCounter: null,
     bouncesCounter: null,
     delaysAppliedCounter: null,
+    baselineThrottledCounter: null,
     rateLimitedCounter: null,
     circuitBreakerTripsCounter: null  // Circuit breaker trip count
 };
@@ -292,6 +294,14 @@ function initMetrics(plugin) {
         metrics.delaysAppliedCounter = new client.Counter({
             name: prefix + 'delays_applied_total',
             help: 'Total times delay was applied before sending',
+            labelNames: ['domain'],
+            registers: [metricsRegistry]
+        });
+
+        // Baseline minDelay throttling counter (Counter)
+        metrics.baselineThrottledCounter = new client.Counter({
+            name: prefix + 'baseline_throttled_total',
+            help: 'Total times baseline minDelay throttling was applied before first rate-limit',
             labelNames: ['domain'],
             registers: [metricsRegistry]
         });
@@ -907,11 +917,15 @@ exports.on_send_email = function (next, hmail) {
     // Calculate time since last send
     const timeSinceLastSend = now - state.lastSendTime;
 
-    // Only apply delay if:
-    // 1. We had RATE LIMIT failures (not just any 4xx) AND
-    // 2. Not enough time has passed since last send
-    if (state.consecutiveRateLimitFailures > 0 && state.delay > cfg.minDelay) {
-        const remainingDelay = state.delay - timeSinceLastSend;
+    // Apply provider pacing between sends:
+    // - Before first rate-limit, enforce baseline minDelay (preemptive pacing)
+    // - After rate-limit failures, enforce adaptive delay (reactive backoff)
+    const targetInterval = state.consecutiveRateLimitFailures > 0
+        ? state.delay
+        : cfg.minDelay;
+
+    if (targetInterval > 0) {
+        const remainingDelay = targetInterval - timeSinceLastSend;
 
         if (remainingDelay > 0) {
             // Record metric: delay applied
@@ -919,8 +933,14 @@ exports.on_send_email = function (next, hmail) {
                 try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
             }
 
-            plugin.loginfo(`Adaptive rate: Throttling ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingDelay / 1000)}s until next allowed send, streak: ${state.consecutiveRateLimitFailures})`);
-            return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} rate limit throttle for ${mxProvider}`);
+            const mode = state.consecutiveRateLimitFailures > 0 ? 'rate-limit throttle' : 'baseline throttle';
+
+            if (mode === 'baseline throttle' && metricsInitialized && metrics.baselineThrottledCounter) {
+                try { metrics.baselineThrottledCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+            }
+
+            plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - DENYSOFT requeue (${Math.ceil(remainingDelay / 1000)}s until next allowed send, streak: ${state.consecutiveRateLimitFailures})`);
+            return next(DENYSOFT, `${INTERNAL_DEFER_PREFIX} ${mode} for ${mxProvider}`);
         }
     }
 
