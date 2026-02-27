@@ -33,14 +33,6 @@ data:
     {{- end }}
     listen={{ join "," $listenPorts }}
     nodes=1
-    strict_rfc1869=false
-    {{- if .Values.haraka.maxMessageSize }}
-    databytes={{ .Values.haraka.maxMessageSize | int64 }}
-    {{- end }}
-
-    [headers]
-    add_received=true
-    clean_auth_results=true
 
   {{- if .Values.tls.enabled }}
   # === TLS/SSL Configuration ===
@@ -96,10 +88,16 @@ data:
     {{- end }}
   {{- end }}
 
-  # Connection settings - from Haraka default config/connection.ini
+  # Connection settings - from Haraka 3.1+ config/connection.ini
+  # NOTE: Since Haraka 3.1.0, strict_rfc1869, headers.*, smtputf8, databytes,
+  # and spool settings all belong in connection.ini (moved from smtp.ini)
   connection.ini: |
     [main]
+    strict_rfc1869=false
     ; smtputf8=true
+    ; Spool large messages to disk to save memory (Haraka 3.1.3+)
+    ; spool_dir=/tmp
+    ; spool_after=-1
 
     [haproxy]
     ; HAProxy PROXY protocol v1/v2 support
@@ -818,19 +816,19 @@ data:
   adaptive-rate.ini: |
     [main]
     enabled=true
-    metrics_port={{ .Values.adaptiveRate.metricsPort }}
-    min_delay={{ .Values.adaptiveRate.defaults.minDelay }}
-    max_delay={{ .Values.adaptiveRate.defaults.maxDelay }}
-    initial_delay={{ .Values.adaptiveRate.defaults.initialDelay }}
+    metrics_port={{ .Values.adaptiveRate.metricsPort | int64 }}
+    min_delay={{ .Values.adaptiveRate.defaults.minDelay | int64 }}
+    max_delay={{ .Values.adaptiveRate.defaults.maxDelay | int64 }}
+    initial_delay={{ .Values.adaptiveRate.defaults.initialDelay | int64 }}
     backoff_multiplier={{ .Values.adaptiveRate.defaults.backoffMultiplier }}
     recovery_rate={{ .Values.adaptiveRate.defaults.recoveryRate }}
-    success_threshold={{ .Values.adaptiveRate.defaults.successThreshold }}
-    circuit_breaker_threshold={{ .Values.adaptiveRate.defaults.circuitBreakerThreshold }}
-    circuit_breaker_duration={{ .Values.adaptiveRate.defaults.circuitBreakerDuration }}
+    success_threshold={{ .Values.adaptiveRate.defaults.successThreshold | int64 }}
+    circuit_breaker_threshold={{ .Values.adaptiveRate.defaults.circuitBreakerThreshold | int64 }}
+    circuit_breaker_duration={{ .Values.adaptiveRate.defaults.circuitBreakerDuration | int64 }}
     {{- if and .Values.persistence.enabled .Values.adaptiveRate.persistence.enabled }}
     state_file={{ .Values.adaptiveRate.persistence.stateFile }}
-    state_save_interval={{ .Values.adaptiveRate.persistence.saveInterval }}
-    state_max_age={{ .Values.adaptiveRate.persistence.maxAge }}
+    state_save_interval={{ .Values.adaptiveRate.persistence.saveInterval | int64 }}
+    state_max_age={{ .Values.adaptiveRate.persistence.maxAge | int64 }}
     {{- end }}
 
     [domains]
@@ -857,13 +855,13 @@ data:
 
     [{{ $domain }}]
     {{- with $config.minDelay }}
-    min_delay={{ . }}
+    min_delay={{ . | int64 }}
     {{- end }}
     {{- with $config.maxDelay }}
-    max_delay={{ . }}
+    max_delay={{ . | int64 }}
     {{- end }}
     {{- with $config.initialDelay }}
-    initial_delay={{ . }}
+    initial_delay={{ . | int64 }}
     {{- end }}
     {{- with $config.backoffMultiplier }}
     backoff_multiplier={{ . }}
@@ -872,13 +870,13 @@ data:
     recovery_rate={{ . }}
     {{- end }}
     {{- with $config.successThreshold }}
-    success_threshold={{ . }}
+    success_threshold={{ . | int64 }}
     {{- end }}
     {{- with $config.circuitBreakerThreshold }}
-    circuit_breaker_threshold={{ . }}
+    circuit_breaker_threshold={{ . | int64 }}
     {{- end }}
     {{- with $config.circuitBreakerDuration }}
-    circuit_breaker_duration={{ . }}
+    circuit_breaker_duration={{ . | int64 }}
     {{- end }}
     {{- end }}
     {{- end }}
@@ -893,13 +891,13 @@ data:
     [{{ $domain }}]
     {{- end }}
     {{- with $config.minDelay }}
-    min_delay={{ . }}
+    min_delay={{ . | int64 }}
     {{- end }}
     {{- with $config.maxDelay }}
-    max_delay={{ . }}
+    max_delay={{ . | int64 }}
     {{- end }}
     {{- with $config.initialDelay }}
-    initial_delay={{ . }}
+    initial_delay={{ . | int64 }}
     {{- end }}
     {{- with $config.backoffMultiplier }}
     backoff_multiplier={{ . }}
@@ -908,13 +906,13 @@ data:
     recovery_rate={{ . }}
     {{- end }}
     {{- with $config.successThreshold }}
-    success_threshold={{ . }}
+    success_threshold={{ . | int64 }}
     {{- end }}
     {{- with $config.circuitBreakerThreshold }}
-    circuit_breaker_threshold={{ . }}
+    circuit_breaker_threshold={{ . | int64 }}
     {{- end }}
     {{- with $config.circuitBreakerDuration }}
-    circuit_breaker_duration={{ . }}
+    circuit_breaker_duration={{ . | int64 }}
     {{- end }}
     {{- end }}
     {{- end }}

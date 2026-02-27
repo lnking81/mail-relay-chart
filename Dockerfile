@@ -45,7 +45,7 @@ RUN apk add --no-cache --virtual .build-deps \
     python3 \
     make \
     g++ \
-    && npm install -g Haraka@3 \
+    && npm install -g Haraka@3.1.3 \
     # === HTTP Server (required for Watch dashboard) ===
     express \
     ws \

@@ -1245,27 +1245,36 @@ function simulateSendWithRetries(clock, hmail, maxAttempts) {
     maxAttempts = maxAttempts || 100;
     let attempts = 0;
     let totalDelayMs = 0;
+    const origSetTimeout = global.setTimeout;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         attempts++;
         let delayed = false;
-        let delaySec = 0;
+        let delayMs = 0;
 
-        adaptiveRate.on_send_email.call(plugin, function (code, sec) {
-            if (code === 908) {
-                delayed = true;
-                delaySec = parseFloat(sec);
-            }
-        }, hmail);
+        // Mock setTimeout to capture sub-second delays from applyDelay
+        global.setTimeout = function (fn, ms) {
+            delayed = true;
+            delayMs = ms;
+            fn(); // Execute synchronously for test
+        };
+
+        try {
+            adaptiveRate.on_send_email.call(plugin, function (code, sec) {
+                if (code === 908) {
+                    delayed = true;
+                    delayMs = parseFloat(sec) * 1000;
+                }
+            }, hmail);
+        } finally {
+            global.setTimeout = origSetTimeout;
+        }
 
         if (!delayed) break;
 
-        // Haraka would wait delaySec, then re-push to delivery_queue
-        const delayMs = Math.ceil(delaySec * 1000);
-        clock.advance(delayMs);
-        totalDelayMs += delayMs;
-
-        // Reset hmail.notes for retry (Haraka preserves notes, but our delay-counted flag should persist)
+        // Advance clock by the delay (either from setTimeout mock or DELAY)
+        clock.advance(Math.ceil(delayMs));
+        totalDelayMs += Math.ceil(delayMs);
     }
 
     return { attempts, totalDelayMs };
