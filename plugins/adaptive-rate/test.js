@@ -135,7 +135,8 @@ function createMockHmail(domain, mxHost = null) {
         todo: {
             domain: domain,
             mxlist: mxHost ? [{ exchange: mxHost }] : []
-        }
+        },
+        notes: {}
     };
 }
 

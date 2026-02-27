@@ -691,22 +691,61 @@ function isDomainEnabled(domain) {
     return false;
 }
 
+// Known two-part TLDs where last 2 parts give a generic suffix, not a domain
+const KNOWN_SECOND_LEVEL_TLDS = new Set([
+    'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
+    'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'net.uk', 'me.uk',
+    'co.nz', 'net.nz', 'org.nz', 'ac.nz', 'govt.nz',
+    'co.za', 'org.za', 'net.za', 'ac.za', 'gov.za',
+    'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
+    'co.kr', 'or.kr', 'go.kr', 'ac.kr', 'ne.kr',
+    'co.in', 'org.in', 'net.in', 'ac.in', 'gov.in',
+    'com.br', 'net.br', 'org.br', 'edu.br', 'gov.br',
+    'com.mx', 'net.mx', 'org.mx', 'edu.mx', 'gob.mx',
+    'com.ar', 'net.ar', 'org.ar', 'edu.ar', 'gov.ar',
+    'com.cn', 'net.cn', 'org.cn', 'edu.cn', 'gov.cn',
+    'com.tw', 'net.tw', 'org.tw', 'edu.tw', 'gov.tw',
+    'com.sg', 'net.sg', 'org.sg', 'edu.sg', 'gov.sg',
+    'com.tr', 'net.tr', 'org.tr', 'edu.tr', 'gov.tr',
+    'com.ua', 'net.ua', 'org.ua', 'edu.ua', 'gov.ua',
+    'co.il', 'org.il', 'net.il', 'ac.il', 'gov.il',
+    'co.th', 'or.th', 'ac.th', 'go.th', 'in.th',
+]);
+
+// Mapping from normalized MX base domains to canonical provider names
+// Applied after extracting the base domain from MX hostname
+const MX_PROVIDER_NORMALIZATION = {
+    'yahoodns.net': 'yahoo.com',
+    'googlemail.com': 'google.com',
+    'yandex.net': 'yandex.ru',
+};
+
 /**
- * Extract base domain from MX hostname (last 2 parts)
+ * Extract base domain from MX hostname with ccTLD awareness
  * Examples:
  *   smtp.google.com -> google.com
  *   aspmx.l.google.com -> google.com
- *   mx1.mail.yahoo.com -> yahoo.com
+ *   mta5.am0.yahoodns.net -> yahoo.com (via MX_PROVIDER_NORMALIZATION)
+ *   mx.example.com.au -> example.com.au (ccTLD aware)
  *   mx.yandex.ru -> yandex.ru
  */
 function normalizeMxProvider(mxHost) {
     if (!mxHost || typeof mxHost !== 'string') return null;
 
     const parts = mxHost.toLowerCase().trim().split('.');
-    if (parts.length >= 2) {
-        return parts.slice(-2).join('.');
+    if (parts.length < 2) return mxHost.toLowerCase();
+
+    // Check for multi-level TLDs (com.au, co.uk, etc.)
+    const lastTwo = parts.slice(-2).join('.');
+    let base;
+    if (KNOWN_SECOND_LEVEL_TLDS.has(lastTwo) && parts.length >= 3) {
+        base = parts.slice(-3).join('.');
+    } else {
+        base = lastTwo;
     }
-    return mxHost.toLowerCase();
+
+    // Map known MX base domains to canonical provider names
+    return MX_PROVIDER_NORMALIZATION[base] || base;
 }
 
 // Hardcoded mapping from common recipient domains to their MX providers
@@ -717,11 +756,43 @@ const KNOWN_PROVIDER_MAPPINGS = {
     'googlemail.com': 'google.com',
     // Microsoft
     'hotmail.com': 'outlook.com',
+    'hotmail.co.uk': 'outlook.com',
+    'hotmail.fr': 'outlook.com',
+    'hotmail.de': 'outlook.com',
+    'hotmail.it': 'outlook.com',
+    'hotmail.es': 'outlook.com',
+    'hotmail.ca': 'outlook.com',
+    'hotmail.co.jp': 'outlook.com',
+    'hotmail.com.br': 'outlook.com',
+    'hotmail.com.au': 'outlook.com',
     'live.com': 'outlook.com',
+    'live.co.uk': 'outlook.com',
+    'live.com.mx': 'outlook.com',
+    'live.com.au': 'outlook.com',
+    'live.fr': 'outlook.com',
+    'live.de': 'outlook.com',
+    'live.it': 'outlook.com',
     'msn.com': 'outlook.com',
     'outlook.com': 'outlook.com',
+    'outlook.co.uk': 'outlook.com',
+    'outlook.fr': 'outlook.com',
+    'outlook.de': 'outlook.com',
+    'outlook.es': 'outlook.com',
+    'outlook.jp': 'outlook.com',
+    'outlook.com.au': 'outlook.com',
+    'outlook.com.br': 'outlook.com',
     // Yahoo
     'yahoo.com': 'yahoo.com',
+    'yahoo.co.uk': 'yahoo.com',
+    'yahoo.co.jp': 'yahoo.com',
+    'yahoo.fr': 'yahoo.com',
+    'yahoo.de': 'yahoo.com',
+    'yahoo.it': 'yahoo.com',
+    'yahoo.es': 'yahoo.com',
+    'yahoo.ca': 'yahoo.com',
+    'yahoo.com.au': 'yahoo.com',
+    'yahoo.com.br': 'yahoo.com',
+    'yahoo.co.in': 'yahoo.com',
     'ymail.com': 'yahoo.com',
     'rocketmail.com': 'yahoo.com',
     // iCloud
@@ -730,6 +801,7 @@ const KNOWN_PROVIDER_MAPPINGS = {
     'mac.com': 'icloud.com',
     // AOL (owned by Yahoo)
     'aol.com': 'yahoo.com',
+    'aol.co.uk': 'yahoo.com',
     // Mail.ru
     'mail.ru': 'mail.ru',
     'inbox.ru': 'mail.ru',
@@ -884,12 +956,15 @@ exports.on_send_email = function (next, hmail) {
     // If circuit is open, DELAY for remaining time
     if (state.circuitOpenUntil > now) {
         const remainingMs = state.circuitOpenUntil - now;
-        const delaySec = Math.ceil(remainingMs / 1000);
+        const delaySec = Math.max(0.1, remainingMs / 1000);
         plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - DELAY ${delaySec}s (closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
 
-        // Record metric: delay applied (due to circuit breaker)
-        if (metricsInitialized && metrics.delaysAppliedCounter) {
-            try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+        // Record metric once per message (not per DELAY cycle)
+        if (!hmail.notes.__adaptive_rate_delay_counted) {
+            hmail.notes.__adaptive_rate_delay_counted = true;
+            if (metricsInitialized && metrics.delaysAppliedCounter) {
+                try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+            }
         }
 
         return next(DELAY, String(delaySec));
@@ -909,11 +984,14 @@ exports.on_send_email = function (next, hmail) {
     // This ensures immediate throttling even before circuit breaker threshold is reached
     if (state.noSendUntil > now) {
         const remainingMs = state.noSendUntil - now;
-        const delaySec = Math.ceil(remainingMs / 1000);
+        const delaySec = Math.max(0.1, remainingMs / 1000);
 
-        // Record metric: delay applied
-        if (metricsInitialized && metrics.delaysAppliedCounter) {
-            try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+        // Record metric once per message (not per DELAY cycle)
+        if (!hmail.notes.__adaptive_rate_delay_counted) {
+            hmail.notes.__adaptive_rate_delay_counted = true;
+            if (metricsInitialized && metrics.delaysAppliedCounter) {
+                try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+            }
         }
 
         plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - DELAY ${delaySec}s (streak: ${state.consecutiveRateLimitFailures})`);
@@ -934,17 +1012,19 @@ exports.on_send_email = function (next, hmail) {
         const remainingDelay = targetInterval - timeSinceLastSend;
 
         if (remainingDelay > 0) {
-            const delaySec = Math.ceil(remainingDelay / 1000);
-
-            // Record metric: delay applied
-            if (metricsInitialized && metrics.delaysAppliedCounter) {
-                try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
-            }
+            const delaySec = Math.max(0.1, remainingDelay / 1000);
 
             const mode = state.consecutiveRateLimitFailures > 0 ? 'rate-limit throttle' : 'baseline throttle';
 
-            if (mode === 'baseline throttle' && metricsInitialized && metrics.baselineThrottledCounter) {
-                try { metrics.baselineThrottledCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+            // Record metric once per message (not per DELAY cycle)
+            if (!hmail.notes.__adaptive_rate_delay_counted) {
+                hmail.notes.__adaptive_rate_delay_counted = true;
+                if (metricsInitialized && metrics.delaysAppliedCounter) {
+                    try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+                }
+                if (mode === 'baseline throttle' && metricsInitialized && metrics.baselineThrottledCounter) {
+                    try { metrics.baselineThrottledCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+                }
             }
 
             plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - DELAY ${delaySec}s (streak: ${state.consecutiveRateLimitFailures})`);
