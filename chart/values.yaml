@@ -612,6 +612,14 @@ dns:
 #     targetPort: 2525   # Different port, no PROXY protocol
 #     proxyProtocol: false
 #
+# === Host Port ===
+# Bind SMTP container ports directly to node ports.
+# Useful when LoadBalancer/NodePort is not available or you need
+# standard ports (25, 465) directly on the node.
+# Requires pod anti-affinity to prevent scheduling conflicts.
+hostPort:
+  enabled: false
+
 services:
   - name: "" # Empty = use fullname without suffix
     type: ClusterIP

@@ -138,9 +138,18 @@ spec:
           ports:
             {{- /* Generate unique container ports from services array */ -}}
             {{- $ports := dict }}
+            {{- $externalPorts := dict }}
             {{- range .Values.services }}
             {{- $targetPort := .targetPort | default 25 | int }}
             {{- $_ := set $ports (printf "%d" $targetPort) $targetPort }}
+            {{- $isInternal := .name }}
+            {{- if not $isInternal }}
+            {{- $_ := set $externalPorts (printf "%d" $targetPort) $targetPort }}
+            {{- range .extraPorts }}
+            {{- $epPort := .targetPort | default .port | int }}
+            {{- $_ := set $externalPorts (printf "%d" $epPort) $epPort }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- /* Add implicit TLS port if configured */ -}}
             {{- if .Values.tls.implicitTlsPort }}
@@ -151,6 +160,9 @@ spec:
             - name: smtp-{{ $port }}
               containerPort: {{ $port }}
               protocol: TCP
+              {{- if and ($.Values.hostPort) ($.Values.hostPort.enabled) (hasKey $externalPorts $portStr) }}
+              hostPort: {{ $port }}
+              {{- end }}
             {{- end }}
             {{- if or .Values.metrics.enabled .Values.dashboard.watch.enabled .Values.dashboard.logReader.enabled }}
             - name: http
