@@ -924,7 +924,7 @@ data:
             "refId": "A"
           }, {
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "max by (domain) (haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{namespace=~\"$namespace\", release=~\"$release\"}) * 1000",
+            "expr": "max by (domain) (haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{namespace=~\"$namespace\", release=~\"$release\"}) * 1000 > 0",
             "format": "table",
             "instant": true,
             "legendFormat": "__auto",
@@ -1029,30 +1029,30 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
           "id": 45,
           "options": {
-            "legend": { "calcs": ["sum", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true, "sortBy": "Total", "sortDesc": true },
+            "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true, "sortBy": "Last *", "sortDesc": true },
             "tooltip": { "mode": "multi", "sort": "desc" }
           },
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "${datasource}" },
-              "expr": "sum by (domain) (increase(haraka_adaptive_rate_deliveries_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]))",
+              "expr": "sum by (domain) (rate(haraka_adaptive_rate_deliveries_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]) * 60)",
               "legendFormat": "{{`{{domain}}`}} - Delivered",
               "refId": "A"
             },
             {
               "datasource": { "type": "prometheus", "uid": "${datasource}" },
-              "expr": "sum by (domain) (increase(haraka_adaptive_rate_deferrals_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]))",
+              "expr": "sum by (domain) (rate(haraka_adaptive_rate_deferrals_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]) * 60)",
               "legendFormat": "{{`{{domain}}`}} - Deferred",
               "refId": "B"
             },
             {
               "datasource": { "type": "prometheus", "uid": "${datasource}" },
-              "expr": "sum by (domain) (increase(haraka_adaptive_rate_bounces_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]))",
+              "expr": "sum by (domain) (rate(haraka_adaptive_rate_bounces_total{namespace=~\"$namespace\", release=~\"$release\"}[5m]) * 60)",
               "legendFormat": "{{`{{domain}}`}} - Bounced",
               "refId": "C"
             }
           ],
-          "title": "Delivery Status by Domain (5m)",
+          "title": "Delivery Status by Domain (per min)",
           "type": "timeseries"
         },
         {
@@ -1605,16 +1605,16 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 57 },
           "id": 60,
           "options": {
-            "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
             "tooltip": { "mode": "multi", "sort": "desc" }
           },
           "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "sum by (dkim, spf) (increase(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]))",
+            "expr": "sum by (dkim, spf) (rate(haraka_dmarc_messages_total{namespace=~\"$namespace\", release=~\"$release\"}[1h]) * 3600)",
             "legendFormat": "DKIM={{`{{dkim}}`}} SPF={{`{{spf}}`}}",
             "refId": "A"
           }],
-          "title": "Messages by Auth Result (1h)",
+          "title": "Messages by Auth Result (per hour)",
           "type": "timeseries"
         },
         {

@@ -1213,6 +1213,241 @@ test('edge: delay is bounded by minDelay on recovery', () => {
 });
 
 // ============================================================================
+// Metrics Accuracy: 500 messages with time simulation
+// ============================================================================
+
+console.log(`\n${YELLOW}Metrics Accuracy: 500 Messages (with Date.now mock)${RESET}`);
+
+/**
+ * Mock Date.now() to simulate time progression.
+ * Returns restore function.
+ */
+function mockDateNow(startTime) {
+    const originalNow = Date.now;
+    let currentTime = startTime || originalNow.call(Date);
+    Date.now = () => currentTime;
+    return {
+        advance(ms) { currentTime += ms; },
+        get time() { return currentTime; },
+        set time(t) { currentTime = t; },
+        restore() { Date.now = originalNow; }
+    };
+}
+
+/**
+ * Simulate Haraka send loop for one message:
+ * 1. Call on_send_email
+ * 2. If DELAY returned → advance clock by delay, call on_send_email again (Haraka re-queues)
+ * 3. Repeat until next() called without DELAY → message proceeds to SMTP delivery
+ * Returns { attempts, totalDelayMs }
+ */
+function simulateSendWithRetries(clock, hmail, maxAttempts) {
+    maxAttempts = maxAttempts || 100;
+    let attempts = 0;
+    let totalDelayMs = 0;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        attempts++;
+        let delayed = false;
+        let delaySec = 0;
+
+        adaptiveRate.on_send_email.call(plugin, function (code, sec) {
+            if (code === 908) {
+                delayed = true;
+                delaySec = parseFloat(sec);
+            }
+        }, hmail);
+
+        if (!delayed) break;
+
+        // Haraka would wait delaySec, then re-push to delivery_queue
+        const delayMs = Math.ceil(delaySec * 1000);
+        clock.advance(delayMs);
+        totalDelayMs += delayMs;
+
+        // Reset hmail.notes for retry (Haraka preserves notes, but our delay-counted flag should persist)
+    }
+
+    return { attempts, totalDelayMs };
+}
+
+test('metrics: 500 messages with min_delay=100ms — simulated timing, total_delivered=500', () => {
+    reloadWithConfig({
+        main: {
+            enabled: 'true',
+            min_delay: '100',         // 0.1 sec baseline pacing
+            max_delay: '300000',
+            initial_delay: '200',     // 0.2 sec initial delay
+            backoff_multiplier: '1.5',
+            recovery_rate: '0.9',
+            success_threshold: '5',
+            circuit_breaker_threshold: '5',
+            circuit_breaker_duration: '60000'
+        },
+        domains: { 'test-metrics.com': 'true' }
+    });
+
+    const clock = mockDateNow(1000000000000); // Fixed start time
+    try {
+        const totalMessages = 500;
+        let totalRetries = 0;
+        let totalSimulatedDelayMs = 0;
+
+        for (let i = 0; i < totalMessages; i++) {
+            const hmail = createMockHmail('test-metrics.com');
+
+            // Simulate real Haraka: on_send_email → DELAY → wait → retry → proceed
+            const result = simulateSendWithRetries(clock, hmail);
+            totalRetries += result.attempts - 1; // -1 for the final successful call
+            totalSimulatedDelayMs += result.totalDelayMs;
+
+            // Message sent to remote MX → delivered
+            adaptiveRate.on_delivered.call(plugin, () => { }, hmail, ['mx.test-metrics.com']);
+        }
+
+        const stats = adaptiveRate.get_domain_stats('test-metrics.com');
+        const totalSimulatedTimeSec = totalSimulatedDelayMs / 1000;
+
+        // Core: every message delivered exactly once
+        assertEqual(stats.total_delivered, totalMessages,
+            `total_delivered should be ${totalMessages}, got ${stats.total_delivered}`);
+
+        assertEqual(stats.total_deferred, 0, 'No deferrals expected');
+        assertEqual(stats.total_bounced, 0, 'No bounces expected');
+        assertFalse(stats.circuit_breaker_open, 'Circuit breaker should be closed');
+
+        // With 100ms min pacing, 500 messages need ≈499 intervals = ~49.9s simulated time
+        assertTrue(totalSimulatedTimeSec >= 40,
+            `Simulated time should be ≥40s (got ${totalSimulatedTimeSec.toFixed(1)}s) — proves real delays were applied`);
+        assertTrue(totalSimulatedTimeSec <= 120,
+            `Simulated time should be ≤120s (got ${totalSimulatedTimeSec.toFixed(1)}s)`);
+
+        // Most messages should have been delayed at least once (baseline pacing)
+        assertTrue(totalRetries >= 400,
+            `At least 400 of 500 messages should have been DELAYed (got ${totalRetries} retries)`);
+
+        // Delay converges to minDelay=100 after many recovery cycles
+        assertEqual(stats.delay_ms, 100, 'Delay should settle at minDelay after many successes');
+
+        console.log(`    ${CYAN}→ Simulated ${totalSimulatedTimeSec.toFixed(1)}s wall time, ${totalRetries} DELAY retries${RESET}`);
+    } finally {
+        clock.restore();
+    }
+});
+
+test('metrics: 500 rapid-fire messages — DELAY enforces pacing, all 500 delivered', () => {
+    reloadWithConfig({
+        main: {
+            enabled: 'true',
+            min_delay: '100',
+            max_delay: '300000',
+            initial_delay: '200',
+            backoff_multiplier: '1.5',
+            recovery_rate: '0.9',
+            success_threshold: '5',
+            circuit_breaker_threshold: '5',
+            circuit_breaker_duration: '60000'
+        },
+        domains: { '__all__': 'true' }
+    });
+
+    const clock = mockDateNow(1000000000000);
+    try {
+        const totalMessages = 500;
+        let totalRetries = 0;
+
+        for (let i = 0; i < totalMessages; i++) {
+            const hmail = createMockHmail('gmail.com');
+
+            // Do NOT advance clock between messages — simulate burst
+            const result = simulateSendWithRetries(clock, hmail);
+            totalRetries += result.attempts - 1;
+
+            adaptiveRate.on_delivered.call(plugin, () => { }, hmail, ['smtp.google.com']);
+        }
+
+        const stats = adaptiveRate.get_domain_stats('google.com');
+
+        // ALL 500 messages delivered despite DELAY throttling
+        assertEqual(stats.total_delivered, totalMessages,
+            `total_delivered must be ${totalMessages}, got ${stats.total_delivered}`);
+
+        // Baseline throttling must have triggered (rapid-fire without clock advance between messages)
+        assertTrue(totalRetries > 0,
+            `Some messages must have been DELAYed by baseline throttle (got ${totalRetries} retries)`);
+
+        console.log(`    ${CYAN}→ ${totalRetries} DELAY retries from baseline pacing${RESET}`);
+    } finally {
+        clock.restore();
+    }
+});
+
+test('metrics: 500 messages mixed delivery/deferral — exact counts with timing', () => {
+    reloadWithConfig({
+        main: {
+            enabled: 'true',
+            min_delay: '100',
+            max_delay: '300000',
+            initial_delay: '200',
+            backoff_multiplier: '1.5',
+            recovery_rate: '0.9',
+            success_threshold: '5',
+            circuit_breaker_threshold: '10',
+            circuit_breaker_duration: '60000'
+        },
+        domains: { 'mixed-test.com': 'true' }
+    });
+
+    const clock = mockDateNow(1000000000000);
+    try {
+        const totalMessages = 500;
+        let deliveredCount = 0;
+        let deferredCount = 0;
+
+        for (let i = 0; i < totalMessages; i++) {
+            const hmail = createMockHmail('mixed-test.com');
+
+            // Send with retry simulation
+            simulateSendWithRetries(clock, hmail);
+
+            // Every 50th message gets rate-limited by remote MX
+            if ((i + 1) % 50 === 0) {
+                adaptiveRate.on_deferred.call(plugin, () => { }, hmail, {
+                    err: { message: '421 4.7.28 rate limit exceeded' },
+                    host: 'mx.mixed-test.com'
+                });
+                deferredCount++;
+            } else {
+                adaptiveRate.on_delivered.call(plugin, () => { }, hmail, ['mx.mixed-test.com']);
+                deliveredCount++;
+            }
+        }
+
+        const stats = adaptiveRate.get_domain_stats('mixed-test.com');
+
+        // Exact delivery/deferral counts
+        assertEqual(stats.total_delivered, deliveredCount,
+            `total_delivered should be ${deliveredCount}, got ${stats.total_delivered}`);
+        assertEqual(stats.total_deferred, deferredCount,
+            `total_deferred should be ${deferredCount}, got ${stats.total_deferred}`);
+        assertEqual(stats.total_rate_limited, deferredCount,
+            `total_rate_limited should be ${deferredCount}, got ${stats.total_rate_limited}`);
+
+        // All messages accounted for
+        assertEqual(stats.total_delivered + stats.total_deferred, totalMessages,
+            `delivered + deferred should equal ${totalMessages}`);
+
+        // Rate limit errors diluted by successes — circuit should NOT trip
+        assertEqual(stats.total_circuit_breaker_trips, 0,
+            'Circuit breaker should NOT trip — rate limits diluted by successes');
+
+        console.log(`    ${CYAN}→ delivered=${deliveredCount}, deferred=${deferredCount}${RESET}`);
+    } finally {
+        clock.restore();
+    }
+});
+
+// ============================================================================
 // Summary
 // ============================================================================
 
