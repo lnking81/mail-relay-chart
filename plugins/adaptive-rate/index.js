@@ -956,7 +956,7 @@ exports.on_send_email = function (next, hmail) {
     // If circuit is open, DELAY for remaining time
     if (state.circuitOpenUntil > now) {
         const remainingMs = state.circuitOpenUntil - now;
-        const delaySec = Math.max(0.1, remainingMs / 1000);
+        const delaySec = remainingMs / 1000;
         plugin.logwarn(`Adaptive rate: CIRCUIT OPEN for ${mxProvider} - DELAY ${delaySec}s (closes at ${new Date(state.circuitOpenUntil).toISOString()})`);
 
         // Record metric once per message (not per DELAY cycle)
@@ -984,7 +984,7 @@ exports.on_send_email = function (next, hmail) {
     // This ensures immediate throttling even before circuit breaker threshold is reached
     if (state.noSendUntil > now) {
         const remainingMs = state.noSendUntil - now;
-        const delaySec = Math.max(0.1, remainingMs / 1000);
+        const delaySec = remainingMs / 1000;
 
         // Record metric once per message (not per DELAY cycle)
         if (!hmail.notes.__adaptive_rate_delay_counted) {
@@ -1012,7 +1012,7 @@ exports.on_send_email = function (next, hmail) {
         const remainingDelay = targetInterval - timeSinceLastSend;
 
         if (remainingDelay > 0) {
-            const delaySec = Math.max(0.1, remainingDelay / 1000);
+            const delaySec = remainingDelay / 1000;
 
             const mode = state.consecutiveRateLimitFailures > 0 ? 'rate-limit throttle' : 'baseline throttle';
 
