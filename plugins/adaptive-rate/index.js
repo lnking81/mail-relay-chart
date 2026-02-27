@@ -79,19 +79,24 @@ try {
  * - On send_email: defer delivery using next(DELAY, seconds)
  *
  * THROTTLING MECHANISM:
- * Two mechanisms are used depending on delay duration:
+ * Two mechanisms are used depending on context:
  *
- * 1) For delays < 1 second: setTimeout(() => next(), ms)
- *    Holds the delivery slot briefly, giving true millisecond precision.
- *    Haraka's temp_fail_queue uses TimerQueue with setInterval(1000) polling,
- *    so DELAY with sub-second values effectively rounds up to ~1 second.
- *    setTimeout avoids this limitation for short pacing intervals.
+ * 1) Claimed slot pacing: setTimeout(() => next(), waitMs)
+ *    Holds the delivery slot and fires next() at the exact claimed time.
+ *    Gives true millisecond precision. MUST use setTimeout (not DELAY)
+ *    because DELAY rounds up via Math.ceil and causes messages with
+ *    different slot times to arrive in the same tick (mini thundering herd).
  *
- * 2) For delays >= 1 second: next(DELAY, seconds)
- *    Frees the delivery slot via next_cb(), then schedules the message
- *    to be re-pushed to delivery_queue via temp_fail_queue.
- *    DELAY does NOT trigger the 'deferred' hook (unlike DENYSOFT),
- *    so there is no self-feedback loop.
+ * 2) Queue-full re-enqueue: next(DELAY, seconds)
+ *    When all slots within CLAIM_HORIZON are taken, the message is
+ *    re-enqueued via DELAY (minimum 1 second) to re-enter on_send_email
+ *    later.  MUST use DELAY (not setTimeout) because setTimeout would
+ *    call next() unconditionally — bypassing rate limiting entirely.
+ *    DELAY does NOT trigger the 'deferred' hook (no self-feedback loop).
+ *
+ * 3) Circuit breaker / noSendUntil: applyDelay(next, ms)
+ *    Uses setTimeout for <1s, DELAY for >=1s.  On re-entry the hook
+ *    re-evaluates the pause window before falling through to pacing.
  *
  * On each re-delivery attempt, our send_email hook re-evaluates the state:
  * - If still within a pause window → delay again
@@ -1079,7 +1084,12 @@ exports.on_send_email = function (next, hmail) {
                 }
 
                 plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - wait ${(waitMs / 1000).toFixed(3)}s, slot at ${new Date(mySlot).toISOString()} (streak: ${state.consecutiveRateLimitFailures})`);
-                return applyDelay(next, waitMs, plugin, mxProvider);
+                // Use setTimeout directly (not applyDelay) to preserve hmail.notes
+                // and deliver at the exact claimed slot time.
+                // applyDelay would use DELAY for >=1s which rounds up via ceil
+                // and causes multiple messages to arrive in the same tick.
+                setTimeout(() => next(), waitMs);
+                return;
             } else {
                 // Long wait — do NOT claim slot, DELAY and re-evaluate later
                 const hopMs = Math.min(waitMs, delay, 5000);
@@ -1092,7 +1102,12 @@ exports.on_send_email = function (next, hmail) {
                 }
 
                 plugin.loginfo(`Adaptive rate: queue full for ${mxProvider} - hop ${(hopMs / 1000).toFixed(3)}s, re-evaluate (streak: ${state.consecutiveRateLimitFailures})`);
-                return applyDelay(next, hopMs, plugin, mxProvider);
+                // MUST use DELAY (not setTimeout) so the message re-enters
+                // on_send_email for re-evaluation.  setTimeout would call next()
+                // unconditionally, bypassing rate limiting entirely.
+                const hopSec = Math.max(1, Math.ceil(hopMs / 1000));
+                next(DELAY, String(hopSec));
+                return;
             }
         } else {
             // Re-entry after DELAY — already have a claimed slot
@@ -1103,8 +1118,9 @@ exports.on_send_email = function (next, hmail) {
                 next();
                 return;
             }
-            // Still waiting for slot
-            return applyDelay(next, remainingMs, plugin, mxProvider);
+            // Still waiting for slot — use setTimeout for exact timing
+            setTimeout(() => next(), remainingMs);
+            return;
         }
     }
 
