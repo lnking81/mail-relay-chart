@@ -2,6 +2,29 @@ apiVersion: v1
 entries:
   mail-relay:
   - apiVersion: v2
+    appVersion: v3.4.29
+    created: "2026-02-27T02:35:33.268526487Z"
+    description: Haraka-based SMTP relay with DKIM signing and DNS automation
+    digest: 8710daf9b94c27b67fecb1e4f0be484b99b3f8f4084ef2bb7d86b2948f20b695
+    home: https://github.com/lnking81/mail-relay-chart
+    keywords:
+    - smtp
+    - mail
+    - relay
+    - haraka
+    - dkim
+    - kubernetes
+    maintainers:
+    - name: lnking81
+    name: mail-relay
+    sources:
+    - https://github.com/lnking81/mail-relay-chart
+    - https://github.com/haraka/Haraka
+    type: application
+    urls:
+    - https://github.com/lnking81/mail-relay-chart/releases/download/mail-relay-3.4.29/mail-relay-3.4.29.tgz
+    version: 3.4.29
+  - apiVersion: v2
     appVersion: v3.4.28
     created: "2026-02-27T02:05:00.74922898Z"
     description: Haraka-based SMTP relay with DKIM signing and DNS automation
@@ -1094,4 +1117,4 @@ entries:
     urls:
     - https://github.com/lnking81/mail-relay-chart/releases/download/mail-relay-0.0.2/mail-relay-0.0.2.tgz
     version: 0.0.2
-generated: "2026-02-27T02:05:00.750051329Z"
+generated: "2026-02-27T02:35:33.268888984Z"
