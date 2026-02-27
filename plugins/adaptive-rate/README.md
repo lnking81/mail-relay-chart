@@ -23,10 +23,10 @@ On each send attempt, the `send_email` hook re-evaluates the current state:
 
 - If circuit breaker is open → `next(DELAY, seconds)` (defer)
 - If `noSendUntil` pause is active → `next(DELAY, seconds)` (defer)
-- If `lastSendTime` interval hasn't elapsed → `next(DELAY, seconds)` (defer)
+- Slot-based pacing: each message claims a slot in `nextSendTime` queue → serialized delivery
 - Otherwise → allow delivery (`next()`)
 
-This approach avoids the **thundering herd problem**: if 100 messages were held via `setTimeout`, they would all fire simultaneously after the delay expires, causing a burst that triggers another rate limit. With DELAY, Haraka's `temp_fail_queue` naturally re-enqueues messages after the precise delay.
+This approach avoids the **thundering herd problem**: concurrent connections all compute their slot from the same `nextSendTime`, advancing it atomically. N connections = 1 message per delay interval, regardless of concurrency. Messages beyond `CLAIM_HORIZON` (min(delay×10, 5s)) are DELAYed without claiming, then re-evaluate — enabling instant recovery when delay decreases.
 
 ## Algorithm
 
@@ -76,10 +76,15 @@ On SEND_EMAIL (before delivery attempt):
   3. Immediate pause check:
      If noSendUntil > now → DELAY N seconds (defer)
 
-  4. Inter-send interval check:
-     If consecutiveRateLimitFailures > 0 AND delay > min_delay:
-       remainingDelay = delay - (now - lastSendTime)
-       If remainingDelay > 0 → DELAY N seconds (defer)
+  4. Slot-based pacing (atomic slot claim):
+     delay = rateLimitStreak > 0 ? state.delay : minDelay
+     Collapse stale slots: if nextSendTime < now → reset to now
+     Recovery collapse: if delay < paceDelay → nextSendTime = now + delay
+     mySlot = nextSendTime; waitMs = mySlot - now
+     claimHorizon = min(delay × 10, 5000ms)
+     If waitMs ≤ 0 → claim slot (nextSendTime = now + delay), send
+     If waitMs ≤ claimHorizon → claim slot (nextSendTime = mySlot + delay), DELAY waitMs
+     If waitMs > claimHorizon → do NOT claim, DELAY min(waitMs, delay, 5s) → re-enter
 
   5. Allow delivery → next()
 ```

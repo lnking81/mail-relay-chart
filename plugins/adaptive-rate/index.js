@@ -43,10 +43,11 @@ try {
  *   - etc. (see normalizeMxProvider function)
  *
  * CONCURRENCY HANDLING:
- * - Tracks lastSendTime per MX provider to enforce minimum interval
- * - Multiple concurrent sends to same provider will respect the delay
- * - First send after a failure triggers the full delay
- * - Subsequent sends within delay window get remaining delay
+ * - Tracks nextSendTime per MX provider with atomic slot claiming
+ * - Each message advances nextSendTime by the current delay interval
+ * - Concurrent sends queue serially: N connections = 1 msg per delay
+ * - CLAIM_HORIZON limits how far ahead a message can reserve a slot
+ * - Recovery collapse: when delay decreases, stale slots are compressed
  *
  * LIMITATIONS:
  * - In-memory state (lost on restart, not shared across instances)
@@ -575,7 +576,8 @@ function loadState(plugin) {
                     totalRateLimited: saved.totalRateLimited || 0,
                     totalCircuitBreakerTrips: saved.totalCircuitBreakerTrips || 0,
                     lastUpdate: saved.lastUpdate || now,
-                    lastSendTime: 0,  // Reset - don't inherit send timing
+                    nextSendTime: 0,  // Reset - don't inherit send timing
+                    paceDelay: 0,     // Reset - will be set on first send
                     circuitOpenUntil: circuitExpired ? 0 : (saved.circuitOpenUntil || 0),
                     noSendUntil: pauseExpired ? 0 : (saved.noSendUntil || 0),
                     lastError: saved.lastError || null
@@ -925,7 +927,8 @@ function getState(domain) {
             totalRateLimited: 0,              // Total rate limit responses
             totalCircuitBreakerTrips: 0,      // Total circuit breaker activations
             lastUpdate: Date.now(),
-            lastSendTime: 0,           // Track last send time for rate limiting
+            nextSendTime: 0,           // Timestamp when next send is allowed (slot queue head)
+            paceDelay: 0,              // Delay used for last claimed slot (for recovery collapse)
             circuitOpenUntil: 0,       // Timestamp when circuit breaker closes (0 = closed)
             noSendUntil: 0,            // Immediate pause until timestamp (set on rate limit)
             lastError: null
@@ -1021,40 +1024,89 @@ exports.on_send_email = function (next, hmail) {
         return applyDelay(next, remainingMs, plugin, mxProvider);
     }
 
-    // Calculate time since last send
-    const timeSinceLastSend = now - state.lastSendTime;
-
-    // Apply provider pacing between sends:
-    // - Before first rate-limit, enforce baseline minDelay (preemptive pacing)
-    // - After rate-limit failures, enforce adaptive delay (reactive backoff)
-    const targetInterval = state.consecutiveRateLimitFailures > 0
+    // SLOT-BASED PACING: enforce serial delivery to MX provider.
+    // Each message claims a slot by advancing nextSendTime atomically.
+    // Node.js is single-threaded, so no races within one event loop tick.
+    // A message claims its slot ONCE and stores it in hmail.notes; on
+    // re-entry after DELAY it waits for that same slot without re-claiming.
+    const delay = state.consecutiveRateLimitFailures > 0
         ? state.delay
         : cfg.minDelay;
 
-    if (targetInterval > 0) {
-        const remainingDelay = targetInterval - timeSinceLastSend;
+    if (delay > 0) {
+        // Step 1: Collapse stale slots
+        // (a) Queue empty (nextSendTime in the past) → reset to now
+        if (state.nextSendTime < now) {
+            state.nextSendTime = now;
+        }
+        // (b) Recovery: delay decreased since last claim → compress queue
+        if (delay < state.paceDelay && state.nextSendTime > now + delay) {
+            state.nextSendTime = now + delay;
+        }
+        state.paceDelay = delay;
 
-        if (remainingDelay > 0) {
-            const mode = state.consecutiveRateLimitFailures > 0 ? 'rate-limit throttle' : 'baseline throttle';
+        // Check if this message already claimed a slot (re-entry after DELAY)
+        let mySlot = hmail.notes.__adaptive_rate_slot;
 
-            // Record metric once per message (not per DELAY cycle)
-            if (!hmail.notes.__adaptive_rate_delay_counted) {
-                hmail.notes.__adaptive_rate_delay_counted = true;
-                if (metricsInitialized && metrics.delaysAppliedCounter) {
-                    try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+        if (mySlot === undefined) {
+            // First entry — claim a slot
+            mySlot = state.nextSendTime;
+            const waitMs = mySlot - now;
+
+            // CLAIM_HORIZON: max time a message will hold a claimed slot.
+            // Beyond this, DELAY without claiming to allow re-evaluation.
+            const claimHorizon = Math.min(delay * 10, 5000);
+
+            if (waitMs <= 0) {
+                // Our turn — claim slot and send immediately
+                state.nextSendTime = now + delay;
+                next();
+                return;
+            } else if (waitMs <= claimHorizon) {
+                // Short wait — claim slot, store in notes, wait inline
+                hmail.notes.__adaptive_rate_slot = mySlot;
+                state.nextSendTime = mySlot + delay;
+                const mode = state.consecutiveRateLimitFailures > 0 ? 'rate-limit throttle' : 'baseline throttle';
+
+                if (!hmail.notes.__adaptive_rate_delay_counted) {
+                    hmail.notes.__adaptive_rate_delay_counted = true;
+                    if (metricsInitialized && metrics.delaysAppliedCounter) {
+                        try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+                    }
+                    if (mode === 'baseline throttle' && metricsInitialized && metrics.baselineThrottledCounter) {
+                        try { metrics.baselineThrottledCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+                    }
                 }
-                if (mode === 'baseline throttle' && metricsInitialized && metrics.baselineThrottledCounter) {
-                    try { metrics.baselineThrottledCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+
+                plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - wait ${(waitMs / 1000).toFixed(3)}s, slot at ${new Date(mySlot).toISOString()} (streak: ${state.consecutiveRateLimitFailures})`);
+                return applyDelay(next, waitMs, plugin, mxProvider);
+            } else {
+                // Long wait — do NOT claim slot, DELAY and re-evaluate later
+                const hopMs = Math.min(waitMs, delay, 5000);
+
+                if (!hmail.notes.__adaptive_rate_delay_counted) {
+                    hmail.notes.__adaptive_rate_delay_counted = true;
+                    if (metricsInitialized && metrics.delaysAppliedCounter) {
+                        try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
+                    }
                 }
+
+                plugin.loginfo(`Adaptive rate: queue full for ${mxProvider} - hop ${(hopMs / 1000).toFixed(3)}s, re-evaluate (streak: ${state.consecutiveRateLimitFailures})`);
+                return applyDelay(next, hopMs, plugin, mxProvider);
             }
-
-            plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - delay ${(remainingDelay / 1000).toFixed(3)}s (streak: ${state.consecutiveRateLimitFailures})`);
-            return applyDelay(next, remainingDelay, plugin, mxProvider);
+        } else {
+            // Re-entry after DELAY — already have a claimed slot
+            const remainingMs = mySlot - now;
+            if (remainingMs <= 0) {
+                // Slot time reached — send
+                delete hmail.notes.__adaptive_rate_slot;
+                next();
+                return;
+            }
+            // Still waiting for slot
+            return applyDelay(next, remainingMs, plugin, mxProvider);
         }
     }
-
-    // Update last send time
-    state.lastSendTime = now;
 
     next();
 };
@@ -1342,7 +1394,7 @@ exports.get_stats = function () {
             circuit_breaker_closes_at: isCircuitOpen ? new Date(state.circuitOpenUntil).toISOString() : null,
             circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
             total_circuit_breaker_trips: state.totalCircuitBreakerTrips,
-            last_send_time: state.lastSendTime ? new Date(state.lastSendTime).toISOString() : null,
+            next_send_time: state.nextSendTime > Date.now() ? new Date(state.nextSendTime).toISOString() : null,
             last_error: state.lastError,
             last_update: new Date(state.lastUpdate).toISOString()
         };
@@ -1375,7 +1427,7 @@ exports.get_domain_stats = function (domain) {
             circuit_breaker_closes_at: isCircuitOpen ? new Date(state.circuitOpenUntil).toISOString() : null,
             circuit_breaker_remaining_ms: isCircuitOpen ? state.circuitOpenUntil - now : 0,
             total_circuit_breaker_trips: state.totalCircuitBreakerTrips,
-            last_send_time: state.lastSendTime ? new Date(state.lastSendTime).toISOString() : null,
+            next_send_time: state.nextSendTime > Date.now() ? new Date(state.nextSendTime).toISOString() : null,
             last_error: state.lastError,
             last_update: new Date(state.lastUpdate).toISOString()
         };
