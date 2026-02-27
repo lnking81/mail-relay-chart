@@ -924,7 +924,7 @@ data:
             "refId": "A"
           }, {
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
-            "expr": "max by (domain) (haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{namespace=~\"$namespace\", release=~\"$release\"}) * 1000 > 0",
+            "expr": "max by (domain) (haraka_adaptive_rate_circuit_breaker_open_until_timestamp_seconds{namespace=~\"$namespace\", release=~\"$release\"}) * 1000",
             "format": "table",
             "instant": true,
             "legendFormat": "__auto",
