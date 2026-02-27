@@ -819,7 +819,7 @@ test('circuit breaker: blocks all sends when open (DELAY)', () => {
 
     // DELAY = 908 (haraka-constants)
     assertEqual(returnCode, 908, `Should return DELAY (908) when circuit is open, got ${returnCode}`);
-    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'Should have a numeric delay in seconds');
+    assertTrue(typeof returnMsg === 'string' && Number(returnMsg) > 0, 'Should have a string delay in seconds');
 });
 
 test('circuit breaker: does NOT close on successful delivery while open (race condition fix)', () => {
@@ -992,7 +992,7 @@ test('throttle: short delay uses DELAY (native Haraka temp_fail_queue)', () => {
     adaptiveRate.on_send_email.call(plugin, (code, msg) => { returnCode = code; returnMsg = msg; }, hmail);
 
     assertEqual(returnCode, 908, `Should return DELAY (908) even for short delay, got ${returnCode}`);
-    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
+    assertTrue(typeof returnMsg === 'string' && Number(returnMsg) > 0, 'DELAY second argument must be a string of seconds');
 });
 
 test('throttle: long noSendUntil uses DELAY', () => {
@@ -1020,7 +1020,7 @@ test('throttle: long noSendUntil uses DELAY', () => {
     adaptiveRate.on_send_email.call(plugin, (code, msg) => { returnCode = code; returnMsg = msg; }, hmail);
 
     assertEqual(returnCode, 908, `Should return DELAY (908) for long pause, got ${returnCode}`);
-    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
+    assertTrue(typeof returnMsg === 'string' && Number(returnMsg) > 0, 'DELAY second argument must be a string of seconds');
 });
 
 test('throttle: minimum interval between sends uses DELAY', () => {
@@ -1043,7 +1043,7 @@ test('throttle: minimum interval between sends uses DELAY', () => {
     adaptiveRate.on_send_email.call(plugin, (code, msg) => { returnCode = code; returnMsg = msg; }, hmail);
 
     assertEqual(returnCode, 908, `All throttling should use DELAY (908), got ${returnCode}`);
-    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
+    assertTrue(typeof returnMsg === 'string' && Number(returnMsg) > 0, 'DELAY second argument must be a string of seconds');
 });
 
 test('throttle: DELAY does not trigger deferred hook (no self-feedback)', () => {
@@ -1073,7 +1073,7 @@ test('throttle: DELAY does not trigger deferred hook (no self-feedback)', () => 
     }, hmail);
 
     assertEqual(returnCode, 908, `Should return DELAY (908), got ${returnCode}`);
-    assertTrue(typeof returnMsg === 'number' && returnMsg > 0, 'DELAY second argument must be numeric seconds');
+    assertTrue(typeof returnMsg === 'string' && Number(returnMsg) > 0, 'DELAY second argument must be a string of seconds');
 
     // Verify counters haven't changed (DELAY doesn't reach on_deferred)
     const after = adaptiveRate.get_domain_stats('google.com');

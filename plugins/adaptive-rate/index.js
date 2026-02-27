@@ -892,7 +892,7 @@ exports.on_send_email = function (next, hmail) {
             try { metrics.delaysAppliedCounter.inc({ domain: mxProvider }); } catch (e) { /* ignore */ }
         }
 
-        return next(DELAY, delaySec);
+        return next(DELAY, String(delaySec));
     }
 
     // Circuit was open but now closed - gradual recovery, NOT full reset
@@ -917,7 +917,7 @@ exports.on_send_email = function (next, hmail) {
         }
 
         plugin.loginfo(`Adaptive rate: PAUSED for ${mxProvider} - DELAY ${delaySec}s (streak: ${state.consecutiveRateLimitFailures})`);
-        return next(DELAY, delaySec);
+        return next(DELAY, String(delaySec));
     }
 
     // Calculate time since last send
@@ -948,7 +948,7 @@ exports.on_send_email = function (next, hmail) {
             }
 
             plugin.loginfo(`Adaptive rate: ${mode} ${mxProvider} - DELAY ${delaySec}s (streak: ${state.consecutiveRateLimitFailures})`);
-            return next(DELAY, delaySec);
+            return next(DELAY, String(delaySec));
         }
     }
 
